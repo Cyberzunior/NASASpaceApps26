@@ -651,6 +651,12 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # ---- connections
         conn = QtWidgets.QGroupBox("Connections  (COM port for USB, ip:port for the UNO Qs)")
+        conn.setObjectName("conn")
+        conn.setStyleSheet("QGroupBox#conn{background:#000; color:#fff; border:1px solid #333; border-radius:4px;"
+                           "margin-top:0; padding-top:24px;}"
+                           "QGroupBox#conn::title{subcontrol-origin:padding; subcontrol-position:top left;"
+                           "left:8px; top:4px; color:#fff;}"
+                           "QGroupBox#conn QLabel{color:#e8e8e8; background:transparent;}")
         grid = QtWidgets.QGridLayout(conn)
         self.rows = {}
         saved = self.settings.get("targets", {})
