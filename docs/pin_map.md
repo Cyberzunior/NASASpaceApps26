@@ -8,8 +8,8 @@
 | D4 | Blue LED (220 ohm) |
 | D5 | Red LED (220 ohm) |
 | A0 | Yellow hit LED (220 ohm) |
-| D6 | free (was the active buzzer, now merged onto D7) |
-| D7 | Active buzzer: beeps 100 ms on / off for HOT, 200 ms on / off for COLD |
+| D6 | Active buzzer: beeps 100 ms on / off for HOT, 200 ms on / off for COLD |
+| D7 | free (was the passive buzzer) |
 | D8 / D9 | LCD RS / E |
 | D10 D11 D12 D13 | LCD D4 D5 D6 D7 |
 | A4 / A5 | I2C display SDA / SCL (lives, add later: `HAS_LIVES_LCD 1`) |

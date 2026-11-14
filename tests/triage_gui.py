@@ -77,7 +77,7 @@ class WeatherTab(Tab):
         "DHT11 temperature and humidity look right for the room",
         "LCD shows text (if only a blue block: turn the contrast pot)",
         "NORMAL: green LED solid, silent, LCD 'T xx.xC NORMAL' / 'H nn%'",
-        "Buzz (BZ): the D7 buzzer beeps for 0.5 s",
+        "Buzz (BZ): the D6 buzzer beeps for 0.5 s",
         "HOT (V,35): red LED blinks, buzzer beeps fast (100 ms), LCD '!! HOT ZONE !!'",
         "COLD (V,10): blue LED blinks, buzzer beeps slower (200 ms), LCD '!! COLD ZONE !!'",
         "Hit (H,14): yellow hit LED on A0 lights for 1 s",
@@ -87,7 +87,7 @@ class WeatherTab(Tab):
     )
     BUTTONS = (
         ("Normal  (V,24)", "V,24", "green LED solid, silent"),
-        ("Buzz D7  (BZ)", "BZ", "buzzer on D7 sounds for 0.5 s"),
+        ("Buzz D6  (BZ)", "BZ", "buzzer on D6 sounds for 0.5 s"),
         ("Hot  (V,35)", "V,35", "red LED blinks, buzzer beeps fast (100 ms on/off)"),
         ("Cold  (V,10)", "V,10", "blue LED blinks, buzzer beeps slower (200 ms on/off)"),
         ("Hit  (H,14)", "H,14", "yellow hit LED for 1 s, LCD unchanged"),
@@ -103,6 +103,9 @@ class WeatherTab(Tab):
         self.reading = None          # (temp, hum, state)
         self.game_over = False
         self.custom = None           # (line1, line2) while L,text is pinned
+        self.auto = None             # running auto test (a generator), see _auto_steps
+        self.auto_wait = None        # (condition on a W reading, deadline)
+        self.auto_results = []       # (name, ok, detail)
 
         lay = QtWidgets.QHBoxLayout(self)
         left = QtWidgets.QVBoxLayout()
@@ -132,6 +135,23 @@ class WeatherTab(Tab):
         left.addWidget(hint("Close the game first: only one program can open the UNO R3's COM port. "
                             "V makes the board ignore the DHT11 until R. Breathe on or warm the DHT11 "
                             "for a real test (above 30 C is HOT, below 18 C is COLD, 1 C hysteresis)."))
+
+        auto = QtWidgets.QGroupBox("Auto test (about 40 s, the buzzer will beep)")
+        al = QtWidgets.QVBoxLayout(auto)
+        row = QtWidgets.QHBoxLayout()
+        self.auto_btn = QtWidgets.QPushButton("Run auto test")
+        self.auto_btn.clicked.connect(lambda: self.stop() if self.auto else self._auto_start())
+        self.auto_status = QtWidgets.QLabel("reads the real DHT11, then walks HOT / COLD and the 1 C hysteresis with V")
+        self.auto_status.setWordWrap(True)
+        row.addWidget(self.auto_btn)
+        row.addWidget(self.auto_status, 1)
+        al.addLayout(row)
+        self.auto_out = QtWidgets.QPlainTextEdit()
+        self.auto_out.setReadOnly(True)
+        self.auto_out.setMinimumHeight(150)
+        self.auto_out.setFont(QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont))
+        al.addWidget(self.auto_out)
+        left.addWidget(auto)
         left.addStretch(1)
         lay.addLayout(left, 3)
 
@@ -168,7 +188,7 @@ class WeatherTab(Tab):
         self.link.line_received.connect(self._on_line)
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self._tick)
-        timer.start(500)
+        timer.start(100)
         self._draw_lcd()
 
     def send(self, line):
@@ -203,6 +223,9 @@ class WeatherTab(Tab):
         self.state.setStyleSheet(f"font-size:24px; font-weight:bold; background:{colour}; color:white;"
                                  "border-radius:6px; padding:6px;")
         self._draw_lcd()
+        if self.auto_wait and self.auto_wait[0](self.reading):
+            self.auto_wait = None
+            self._auto_next(self.reading + (self.last_t,))
 
     def _draw_lcd(self):
         """Same text as showWeather() in weather_station.ino."""
@@ -225,6 +248,100 @@ class WeatherTab(Tab):
     def _tick(self):
         if self.last_t is not None:
             self.age.setText(f"last W line {time.monotonic() - self.last_t:.1f} s ago (expect one every 2 s)")
+        if self.auto_wait and time.monotonic() > self.auto_wait[1]:
+            self.auto_wait = None
+            self._auto_next(None)
+
+    # -- auto test: a generator that yields (condition, timeout) and gets back the
+    #    matching W reading (temp, hum, state, arrival time) or None on timeout
+    @staticmethod
+    def expected_states(temp):
+        """States the firmware may be in at this temperature (the 1 C bands allow two)."""
+        if temp > 30:
+            return {2}
+        if temp < 18:
+            return {1}
+        return {0, 2} if temp >= 29 else {0, 1} if temp <= 19 else {0}
+
+    def _auto_start(self):
+        if not self.link.is_open:
+            self.auto_status.setText("connect the weather station first")
+            return
+        self.auto_out.clear()
+        self.auto_results = []
+        self.auto = self._auto_steps()
+        self.auto_btn.setText("Stop auto test")
+        self.auto_status.setText("running ...")
+        self._auto_next(None)
+
+    def _auto_next(self, value):
+        try:
+            cond, timeout = self.auto.send(value)
+        except StopIteration:
+            passed = sum(ok for _, ok, _ in self.auto_results)
+            self._auto_end(f"done: {passed} of {len(self.auto_results)} passed")
+            return
+        self.auto_wait = (cond, time.monotonic() + timeout)
+
+    def _auto_end(self, text):
+        self.auto = self.auto_wait = None
+        self.auto_btn.setText("Run auto test")
+        self.auto_status.setText(text)
+
+    def _check(self, name, ok, detail=""):
+        self.auto_results.append((name, bool(ok), detail))
+        self.auto_out.appendPlainText(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"   ({detail})" if detail else ""))
+
+    def _auto_steps(self):
+        name = self.STATE
+
+        # 1. the real sensor
+        self.send("R")
+        self.auto_out.appendPlainText("reading the DHT11 for about 8 s ...")
+        seen = []
+        while len(seen) < 4:
+            w = yield (lambda r: True, 5.0)
+            if w is None:
+                break
+            seen.append(w)
+        self._check("W lines arrive", len(seen) >= 4, f"{len(seen)} in the window")
+        if len(seen) < 2:
+            return
+        gaps = [b[3] - a[3] for a, b in zip(seen, seen[1:])]
+        gaps = [g for g in gaps if g > 0.3]        # a state change sends an extra W at once
+        self._check("one W about every 2 s", gaps and all(1.5 <= g <= 2.6 for g in gaps),
+                    ", ".join(f"{g:.2f} s" for g in gaps))
+        temp, hum, state, _ = seen[-1]
+        self._check("DHT11 temperature plausible (0-50 C)", 0 <= temp <= 50, f"{temp:.1f} C")
+        self._check("DHT11 humidity plausible (20-95 %)", 20 <= hum <= 95, f"{hum:.0f} %")
+        self._check("state matches the real temperature", state in self.expected_states(temp),
+                    f"{temp:.1f} C is {name[state][0]}")
+        real = temp
+
+        # 2. thresholds and hysteresis with simulated temperatures
+        for v, want, why in ((35, 2, "35 C -> HOT"), (29.5, 2, "29.5 C stays HOT (1 C hysteresis)"),
+                             (28.5, 0, "28.5 C -> NORMAL"), (10, 1, "10 C -> COLD"),
+                             (18.5, 1, "18.5 C stays COLD (1 C hysteresis)"), (19.5, 0, "19.5 C -> NORMAL")):
+            self.send(f"V,{v:g}")
+            w = yield (lambda r, v=v, want=want: abs(r[0] - v) < 0.05 and r[2] == want, 4.5)
+            last = self.reading
+            self._check(why, w is not None,
+                        "" if w else f"last W {last[0]:.1f} C {name.get(last[2], ('?',))[0]}" if last else "no W")
+
+        # 3. back to the real sensor
+        self.send("R")
+        w = yield (lambda r: abs(r[0] - real) <= 2.0, 5.0)
+        self._check("R: back to the real sensor", w is not None and w[2] in self.expected_states(w[0]),
+                    f"{w[0]:.1f} C {name[w[2]][0]}" if w else "no real reading after R")
+
+    def results(self):
+        return super().results() + [(f"auto: {n}" + (f" ({d})" if d else ""), ok) for n, ok, d in self.auto_results]
+
+    def stop(self):
+        if self.auto:
+            self.auto.close()
+            self._auto_end("stopped")
+            self.send("R")
 
 
 # ----------------------------------------------------------------------- robot

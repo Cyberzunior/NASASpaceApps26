@@ -257,6 +257,7 @@ class StationLink(Link):
         self.lives = C.LIVES
         self.over = False
         self._zone_sent, self._t_zone = None, 0.0
+        self.swing = None                  # C, from the NASA flare under the pot; None = never sent
 
     def tick(self):
         t = now()
@@ -292,12 +293,19 @@ class StationLink(Link):
         self.over, self.lives = False, C.LIVES
         return self.send("R")
 
+    def set_swing(self, c):
+        if c != self.swing:
+            self.swing = c
+            self.send(P.encode("Y", "%.1f" % c))
+
     def virtual_temp(self, c):
         return self.send(P.encode("V", "%.1f" % c))
 
     def handle(self, msg):
         if msg[0] == "W":
             self.bus.post("weather", msg[1], msg[2], msg[3])
+        elif msg[0] == "N":
+            self.bus.post("pot", msg[1], msg[2] / 10.0)
 
     def resync(self):
         if self.over:
@@ -305,6 +313,8 @@ class StationLink(Link):
         else:
             self.send("R")
             self.send(P.encode("H", self.lives))
+        if self.swing is not None:
+            self.send(P.encode("Y", "%.1f" % self.swing))
         self._zone_sent = None
 
 

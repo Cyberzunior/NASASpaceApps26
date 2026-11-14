@@ -310,7 +310,7 @@ WIRES = {
         ("blue LED", "D4", "led"),
         ("red LED", "D5", "led"),
         ("yellow hit LED", "A0", "led"),
-        ("active buzzer", "D7", "active_buzzer"),
+        ("active buzzer", "D6", "active_buzzer"),
         ("LCD RS", "D8", "lcd"), ("LCD E", "D9", "lcd"),
         ("LCD D4", "D10", "lcd"), ("LCD D5", "D11", "lcd"),
         ("LCD D6", "D12", "lcd"), ("LCD D7", "D13", "lcd"),

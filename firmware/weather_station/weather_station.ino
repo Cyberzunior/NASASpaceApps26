@@ -1,13 +1,18 @@
 // T-Minus_6 weather station, firmware v2. ELEGOO UNO R3 (5 V). Protocol: see laptop/devio/protocol.py.
-// Lines in : I?   Z,state   V,temp   H,lives   G   R   BZ   L,text     (state 0 normal, 1 cold, 2 hot)
+// Lines in : I?   Z,state   V,temp   H,lives   G   R   BZ   L,text   Y,swing     (state 0 normal, 1 cold, 2 hot)
 //            BZ = 0.5 s test beep. L,line1|line2 pins custom text on the LCD until R or an empty L,
+//            Y,swing = orbit temperature swing in C from the laptop (NASA solar flare data); Y,-1 = the pot decides
 // Lines out: I,weather,2   W,temp,hum,state  (every 2 s AND at once on every state change)
-// Effective state = the more severe of (DHT11 with 1 C hysteresis, the game's zone Z). V overrides the sensor for tests.
+//            N,pot,swing10  (every 2 s: pot on A1 0-1023, swing in tenths of a C)
+// No DHT11: the temperature is simulated. temp = BASE_C + swing * sin(orbit phase), one 60 s "orbit" through sunlight and
+// Earth's shadow. The swing is the pot on A1 (0-12 C), or the laptop's Y when it has a NASA flare for the pot position.
+// W's humidity field is always 0 (kept so the protocol stays the same).
+// Effective state = the more severe of (that temp with 1 C hysteresis, the game's zone Z). V overrides it for tests.
 // No delay() anywhere: the loop never waits.
-#include <DHT.h>
 #include <LiquidCrystal.h>                 // the 16-pin weather LCD (built in)
 
 #define FW_VERSION 2
+#define HAS_POT 1                          // 10k pot on A1 (outer legs 5V / GND, wiper A1); 0 = no pot, no swing
 #define HAS_LIVES_LCD 0                    // set to 1 when the I2C 16x2 lives display is fitted (needs LiquidCrystal_I2C)
 #if HAS_LIVES_LCD
 #include <Wire.h>
@@ -15,16 +20,21 @@
 #endif
 
 const float COLD_C = 18.0, HOT_C = 30.0, HYST = 1.0;
+const float BASE_C = 24.0;                        // temperature with no swing
+const float POT_SWING_MAX = 12.0;                  // C of swing with the pot fully right and no laptop
+const unsigned long ORBIT_MS = 60000;              // one sunlit + shadow cycle
 enum State { NORMAL = 0, COLD = 1, HOT = 2 };      // numbers match the protocol, and a bigger number is more severe
 State sensorState = NORMAL, zoneState = NORMAL, state = NORMAL;
 
 // Pins (do not change: they match docs/pin_map.md and the wiring diagrams)
-const int PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, BUZZER = 7;   // one active buzzer on D7, D6 is free
-DHT dht(PIN_DHT, DHT11);
+const int GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, BUZZER = 6;   // one active buzzer on D6, D7 is free
+const int PIN_POT = A1;
 LiquidCrystal weatherLcd(8, 9, 10, 11, 12, 13);    // RS, E, D4, D5, D6, D7
 
-unsigned long tSensor = 0, tLcd = 0, tBlink = 0, tHit = 0, tBuzz = 0;
-float temp = 22.0, hum = 40.0, virtualTemp = 0.0;
+unsigned long tSensor = 0, tLcd = 0, tBlink = 0, tHit = 0, tBuzz = 0, tPot = 0;
+float temp = BASE_C, virtualTemp = 0.0;           // temp = what we report: BASE_C + orbit swing
+const int hum = 0;                                 // no humidity sensor any more
+float pot = 0, laptopSwing = -1;                   // laptopSwing < 0: no Y yet, the pot sets the swing alone
 bool useVirtual = false, blinkOn = false, gameOver = false, showCustom = false;
 char custom[2][17];                                // L,text for testing the LCD
 int lives = 15;
@@ -57,6 +67,13 @@ void printPadded(const char* s) {                  // always writes 16 character
   snprintf(buf, sizeof(buf), "%-16s", s);
   weatherLcd.print(buf);
 }
+float swing() {                                    // C of orbit swing right now
+  if (!HAS_POT) return 0;
+  return laptopSwing >= 0 ? laptopSwing : pot / 1023.0 * POT_SWING_MAX;
+}
+float orbitOffset(unsigned long now) {             // + in sunlight, - in Earth's shadow
+  return swing() * sin(6.2832 * (now % ORBIT_MS) / ORBIT_MS);
+}
 void showWeather() {                               // called every 5 s and at once on every state change
   char l1[20], l2[20];
   if (showCustom)         { strcpy(l1, custom[0]); strcpy(l2, custom[1]); }
@@ -67,13 +84,16 @@ void showWeather() {                               // called every 5 s and at on
     char t[10];
     dtostrf(temp, 4, 1, t);
     snprintf(l1, sizeof(l1), "T %sC NORMAL", t);
-    snprintf(l2, sizeof(l2), "H %d%%", (int)hum);
+    snprintf(l2, sizeof(l2), "ORBIT SWING %dC", (int)(swing() + 0.5));
   }
   weatherLcd.setCursor(0, 0); printPadded(l1);
   weatherLcd.setCursor(0, 1); printPadded(l2);
 }
 void sendW() {
   Serial.print("W,"); Serial.print(temp, 1); Serial.print(','); Serial.print((int)hum); Serial.print(','); Serial.println((int)state);
+}
+void sendN() {
+  Serial.print("N,"); Serial.print((int)pot); Serial.print(','); Serial.println((int)(swing() * 10 + 0.5));
 }
 void updateState() {
   float t = useVirtual ? virtualTemp : temp;
@@ -114,6 +134,7 @@ void handleLine(const char* s) {
     snprintf(custom[1], 17, "%s", bar ? bar + 1 : "");
     showCustom = s[2] != 0; showWeather(); tLcd = millis();
   }
+  else if (s[0] == 'Y' && s[1] == ',') { float y = atof(s + 2); laptopSwing = y < 0 ? -1 : min(y, 20.0); }
   else if (!strcmp(s, "BZ"))        { tBuzz = millis(); if (!tBuzz) tBuzz = 1; }
   else if (!strcmp(s, "R"))         { showCustom = false; gameOver = false; lives = 15; useVirtual = false; zoneState = NORMAL; updateState(); showLives(); showWeather(); }
 }
@@ -126,7 +147,6 @@ void readSerial() {                                // collects one line at a tim
 }
 void setup() {
   Serial.begin(115200);
-  dht.begin();
   weatherLcd.begin(16, 2);
   pinMode(GREEN, OUTPUT); pinMode(BLUE, OUTPUT); pinMode(RED, OUTPUT);
   pinMode(HIT_LED, OUTPUT); pinMode(BUZZER, OUTPUT);
@@ -144,13 +164,14 @@ void setup() {
 }
 void loop() {
   unsigned long now = millis();
-  if (now - tSensor >= 2000) {                     // read the sensor every 2 s (the DHT11 is slow and about 2 C accurate)
+  if (now - tSensor >= 2000) {                     // new temperature and a W line every 2 s
     tSensor = now;
-    float t = dht.readTemperature(), h = dht.readHumidity();
-    if (!isnan(t) && !useVirtual) { temp = t; hum = isnan(h) ? hum : h; }
+    if (!useVirtual) temp = BASE_C + orbitOffset(now);
     updateState();
     sendW();
+    if (HAS_POT) sendN();
   }
+  if (HAS_POT && now - tPot >= 50) { tPot = now; pot += (analogRead(PIN_POT) - pot) * 0.2; }   // smoothed
   if (now - tLcd >= 5000) { tLcd = now; showWeather(); }          // the temperature shows every 5 s
   readSerial();
   outputs(now);

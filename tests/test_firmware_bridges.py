@@ -30,7 +30,7 @@ def test_robot_uses_drv8833_pins_and_no_blocking_pulsein():
 
 def test_weather_pins_and_texts_match_the_spec():
     s = read("firmware", "weather_station", "weather_station.ino")
-    assert "PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, BUZZER = 7;" in s
+    assert "PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, BUZZER = 6;" in s
     assert "LiquidCrystal weatherLcd(8, 9, 10, 11, 12, 13)" in s
     for text in ("!! HOT ZONE !!", "!! COLD ZONE !!", "MOVE AWAY NOW!", "SIGNAL LOST", "GAME OVER", "I,weather,2", "HAS_LIVES_LCD 0", "0x27", "0x3F"):
         assert text in s, text

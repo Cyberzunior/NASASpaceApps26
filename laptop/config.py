@@ -100,6 +100,9 @@ SPIKE_WINDOW_S = 10.0
 ZONE_KEEPALIVE_S = 2.0
 WEATHER_LOG_S = 5.0
 WEATHER_TURN_PENALTY = 0.2   # turn rate lost in a hot or cold zone (0 = off)
+SPACE_WEATHER = True         # the station pot picks a real NASA DONKI solar flare that sets the orbit swing
+NASA_API_KEY = "DEMO_KEY"    # free key from api.nasa.gov (DEMO_KEY: a few calls an hour); put yours in config.local.json
+SPACE_WEATHER_DAYS = 30      # how far back the flare list goes
 
 # ---- Auto-pilot
 AP_CRUISE = 0.8

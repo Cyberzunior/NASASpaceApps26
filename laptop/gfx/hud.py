@@ -92,11 +92,14 @@ class Hud:
             fonts.text(surf, "C", (r.left + 175, r.top + 62), 30, K.GREY)
             arrow = {"rising": "^ rising", "falling": "v falling", "steady": "- steady", "spike": "! SPIKE"}[w.trend]
             fonts.text(surf, arrow, (r.right - 20, r.top + 56), 20, K.YELLOW if w.trend == "spike" else K.CYAN, anchor="topright")
-            fonts.text(surf, "humidity %d%%" % (w.hum or 0), (r.right - 20, r.top + 84), 18, K.GREY, anchor="topright")
+            fonts.text(surf, "orbit swing +/-%.0f C" % game.pot_swing, (r.right - 20, r.top + 84), 18, K.GREY, anchor="topright")
         vals = [v for (_, v) in w.history]
         sparkline(surf, (r.left + 20, r.top + 118, r.w - 40, 46), vals, col, 10, 40)
         fonts.text(surf, "last 60 s", (r.left + 22, r.top + 166), 15, K.DIM)
-        if w.robot_temp is not None:
+        if game.flare is not None:
+            fonts.text(surf, "Sun: %s  +/-%.0f C" % (game.space.label(game.flare), game.flare["swing"]),
+                       (r.right - 20, r.top + 166), 17, K.YELLOW, anchor="topright")
+        elif w.robot_temp is not None:
             fonts.text(surf, "Robot air %.1f C" % w.robot_temp, (r.right - 20, r.top + 166), 17, K.GREY, anchor="topright")
         else:
             fonts.text(surf, "zone: %s" % wx.NAMES[w.zone].lower(), (r.right - 20, r.top + 166), 17, K.DIM, anchor="topright")

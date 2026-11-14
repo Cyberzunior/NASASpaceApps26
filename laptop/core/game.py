@@ -5,6 +5,7 @@ import math
 import random
 import config as C
 from core import hazards as hz
+from core import spaceweather as sw
 from core import weather as wx
 from core.autopilot import Autopilot
 from core.calibration import aim_servo
@@ -33,6 +34,9 @@ class Game:
         self.log = log or (lambda msg: None)
         self.field = hz.HazardField()
         self.weather = wx.WeatherModel()
+        self.space = sw.SpaceWeather()           # NASA DONKI flares; the app calls space.refresh()
+        self.flare = None                        # the flare under the station's pot, None = no NASA data / no pot yet
+        self.pot_swing = 0.0                     # the swing the station reports using
         self.autopilot = Autopilot()
         self.lives = Lives()
         self.fx, self.toasts = [], []            # drained by the renderer / HUD
@@ -117,6 +121,14 @@ class Game:
                     a.state = hz.FLY
         elif kind == "weather":
             self.weather.on_station(d[0], d[1], d[2], self.wall)
+        elif kind == "pot":
+            self.pot_swing = d[1]
+            if C.SPACE_WEATHER and self.space.loaded():      # without NASA data the pot sets the swing alone
+                e = self.space.pick(d[0])
+                if e is not self.flare:
+                    self.log("pot %d: %s, swing %.1f C" % (d[0], self.space.label(e), e["swing"]))
+                self.flare = e
+                self.station.set_swing(e["swing"])
         elif kind == "robot_air":
             self.weather.on_robot_air(d[0], d[1], self.wall)
         elif kind == "device_down" and d[0] == "station":

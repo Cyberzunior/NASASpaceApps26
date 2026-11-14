@@ -12,6 +12,7 @@ _SPEC = {
     "S": "iii", "B": "s", "T": "ff",
     "F": "", "A": "i", "K": "", "C": "iii",
     "W": "fii", "Z": "i", "V": "f", "H": "i", "G": "",
+    "N": "ii", "Y": "f",                      # station pot (raw, swing in 0.1 C) / swing from the laptop
 }
 
 

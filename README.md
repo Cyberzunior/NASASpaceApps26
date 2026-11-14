@@ -21,7 +21,7 @@ simulated weather sensor. `python main.py --sim --demo` plays the scripted rehea
 | Folder | What |
 |---|---|
 | `laptop/` | The game and everything on the laptop side (see below) |
-| `firmware/weather_station/` | UNO R3: DHT11, 16-pin LCD, LEDs, one buzzer on D7, hot / cold warnings, optional I2C lives display |
+| `firmware/weather_station/` | UNO R3: DHT11, 16-pin LCD, LEDs, one buzzer on D6, hot / cold warnings, optional I2C lives display |
 | `firmware/robot/` | UNO Q #1: `robot.ino` (microcontroller) and `linux_bridge/robot_bridge.py` (Linux side, UDP to Bridge) |
 | `firmware/tower/` | UNO Q #2: `tower.ino` and `linux_bridge/tower_bridge.py` |
 | `tests/` | `test_*.py` automated tests, plus the hardware triage tools (`triage_gui.py`, `triage.py`, bench sketches) |

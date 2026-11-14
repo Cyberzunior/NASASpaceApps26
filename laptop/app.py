@@ -75,6 +75,8 @@ class App:
         self.sims = []
         self._start_devices()
         self.game = Game(self.state, self.links["robot"], self.links["tower"], self.links["station"], self.log)
+        if C.SPACE_WEATHER and not headless:
+            self.game.space.refresh()                # NASA DONKI flares, in the background
         self.sm = StateMachine(self._on_state)
         self.audio = None
         self.world_view = self.postfx = self.hud = None
@@ -574,7 +576,7 @@ class App:
     def drain_bus(self):
         for ev in self.bus.drain():
             k = ev.kind
-            if k in ("scan", "bumper", "tower_k", "weather", "robot_air"):
+            if k in ("scan", "bumper", "tower_k", "weather", "robot_air", "pot"):
                 self.game.handle(ev)
                 if k == "bumper":
                     rumble(self.state.pad, 0.8, 300)

@@ -9,5 +9,6 @@
   "V_MAX": 15.0,
   "W_MAX": 90.0,
   "TURN_GAIN": 0.6,
-  "SYNC_DELAY_MS": 0
+  "SYNC_DELAY_MS": 0,
+  "NASA_API_KEY": "your-key-from-api.nasa.gov"
 }

@@ -269,6 +269,8 @@ class SimStation(threading.Thread):
         self.air = 23.0
         self.hum = 40
         self.virtual = None
+        self.pot = 0                       # A1, 0-1023 (set_pot in tests)
+        self.laptop_swing = -1.0           # Y from the laptop; < 0 = the pot decides
         self.sensor_state = 0
         self.zone = 0
         self.lives = C.LIVES
@@ -289,8 +291,16 @@ class SimStation(threading.Thread):
             self.rx = bytearray(rest)
             self._line(line.decode("ascii", "ignore").strip())
 
+    def set_pot(self, raw):
+        self.pot = raw
+
+    def swing(self):
+        return self.laptop_swing if self.laptop_swing >= 0 else self.pot / 1023.0 * 12.0
+
     def _temp(self):
-        return self.virtual if self.virtual is not None else self.air
+        if self.virtual is not None:
+            return self.virtual
+        return self.air + self.swing() * math.sin(2 * math.pi * (now() % 60.0) / 60.0)
 
     def _update(self):
         t = self._temp()
@@ -309,6 +319,7 @@ class SimStation(threading.Thread):
 
     def _send_w(self):
         self.port.feed_from_device("W,%.1f,%d,%d" % (self._temp(), self.hum, self.state))
+        self.port.feed_from_device("N,%d,%d" % (self.pot, round(self.swing() * 10)))
         self.t_w = now()
 
     def lcd(self):
@@ -331,6 +342,8 @@ class SimStation(threading.Thread):
             self.zone = m[1]
         elif k == "V":
             self.virtual = m[1]
+        elif k == "Y":
+            self.laptop_swing = -1.0 if m[1] < 0 else min(m[1], 20.0)
         elif k == "H":
             if m[1] < self.lives:
                 self.hit_until = now() + 1.0
