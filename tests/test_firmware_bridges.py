@@ -34,8 +34,8 @@ def test_weather_pins_and_texts_match_the_spec():
     assert "LiquidCrystal weatherLcd(8, 9, 10, 11, 12, 13)" in s
     for text in ("!! HOT ZONE !!", "!! COLD ZONE !!", "MOVE AWAY NOW!", "SIGNAL LOST", "GAME OVER", "I,weather,2", "HAS_LIVES_LCD 0", "0x27", "0x3F"):
         assert text in s, text
-    assert "now - tBlink >= 100" in s and "setBuzz(400)" in s and "setBuzz(2000)" in s
-    assert '!strcmp(s, "BZ")' in s
+    assert "now - tBlink >= 100" in s and "(now / 100) % 2" in s and "(now / 200) % 2" in s
+    assert '!strcmp(s, "BZ")' in s and "s[0] == 'L' && s[1] == ','" in s
 
 
 def test_tower_pins_and_rules():

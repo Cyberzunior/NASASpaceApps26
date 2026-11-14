@@ -78,17 +78,18 @@ class WeatherTab(Tab):
         "LCD shows text (if only a blue block: turn the contrast pot)",
         "NORMAL: green LED solid, silent, LCD 'T xx.xC NORMAL' / 'H nn%'",
         "Buzz (BZ): the D7 buzzer beeps for 0.5 s",
-        "HOT (V,35): red LED blinks, buzzer fast high beeps, LCD '!! HOT ZONE !!'",
-        "COLD (V,10): blue LED blinks, buzzer fast low beeps, LCD '!! COLD ZONE !!'",
+        "HOT (V,35): red LED blinks, buzzer beeps fast (100 ms), LCD '!! HOT ZONE !!'",
+        "COLD (V,10): blue LED blinks, buzzer beeps slower (200 ms), LCD '!! COLD ZONE !!'",
         "Hit (H,14): yellow hit LED on A0 lights for 1 s",
         "Game over (G): LEDs off, silent, LCD 'SIGNAL LOST' / 'GAME OVER'",
+        "Custom text (L,line1|line2) shows on both LCD lines",
         "Reset (R): back to green and the real temperature",
     )
     BUTTONS = (
         ("Normal  (V,24)", "V,24", "green LED solid, silent"),
-        ("Buzz D7  (BZ)", "BZ", "buzzer on D7 beeps 1 kHz for 0.5 s"),
-        ("Hot  (V,35)", "V,35", "red LED blinks, buzzer fast 2 kHz beeps"),
-        ("Cold  (V,10)", "V,10", "blue LED blinks, buzzer fast 400 Hz beeps"),
+        ("Buzz D7  (BZ)", "BZ", "buzzer on D7 sounds for 0.5 s"),
+        ("Hot  (V,35)", "V,35", "red LED blinks, buzzer beeps fast (100 ms on/off)"),
+        ("Cold  (V,10)", "V,10", "blue LED blinks, buzzer beeps slower (200 ms on/off)"),
         ("Hit  (H,14)", "H,14", "yellow hit LED for 1 s, LCD unchanged"),
         ("Game over  (G)", "G", "all LEDs off, silent"),
         ("Reset  (R)", "R", "real sensor again, 15 lives"),
@@ -101,6 +102,7 @@ class WeatherTab(Tab):
         self.last_t = None
         self.reading = None          # (temp, hum, state)
         self.game_over = False
+        self.custom = None           # (line1, line2) while L,text is pinned
 
         lay = QtWidgets.QHBoxLayout(self)
         left = QtWidgets.QVBoxLayout()
@@ -142,6 +144,19 @@ class WeatherTab(Tab):
                                "border:6px solid #222; border-radius:4px;")
         self.lcd.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         ll.addWidget(self.lcd)
+        row = QtWidgets.QHBoxLayout()
+        self.text = QtWidgets.QLineEdit()
+        self.text.setMaxLength(33)
+        self.text.setPlaceholderText("custom text: line 1|line 2 (16 characters each)")
+        self.text.returnPressed.connect(self._send_text)
+        send = QtWidgets.QPushButton("Send")
+        send.clicked.connect(self._send_text)
+        back = QtWidgets.QPushButton("Back to weather")
+        back.clicked.connect(lambda: self.send("L,"))
+        row.addWidget(self.text, 1)
+        row.addWidget(send)
+        row.addWidget(back)
+        ll.addLayout(row)
         ll.addWidget(hint("Driven by the weather station UNO R3 (weather_station.ino): RS D8, E D9, "
                           "D4-D7 to D10-D13, RW (pin 5) to GND, contrast pot wiper to V0. The board "
                           "redraws the temperature every 5 s and a warning at once."))
@@ -163,8 +178,16 @@ class WeatherTab(Tab):
         if line == "G":
             self.game_over = True
         elif line == "R":
-            self.game_over = False
+            self.game_over, self.custom = False, None
+        elif line.startswith("L,"):
+            parts = (line[2:].split("|", 1) + [""])[:2]
+            self.custom = (parts[0][:16], parts[1][:16]) if line[2:] else None
         self._draw_lcd()
+
+    def _send_text(self):
+        text = self.text.text().encode("ascii", "replace").decode()    # the LCD has no accents or emoji
+        if text.strip():
+            self.send("L," + text)
 
     def _on_line(self, line):
         v = parse_line(line, "W", 3)
@@ -183,7 +206,9 @@ class WeatherTab(Tab):
 
     def _draw_lcd(self):
         """Same text as showWeather() in weather_station.ino."""
-        if self.game_over:
+        if self.custom:
+            l1, l2 = self.custom
+        elif self.game_over:
             l1, l2 = "SIGNAL LOST", "GAME OVER"
         elif self.reading is None:
             l1, l2 = "(waiting for W)", ""

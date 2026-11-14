@@ -370,7 +370,7 @@ class HwCheckScreen:
         ("tower_fire", "Tower released one ball and answered K", "auto"),
         ("station_link", "Weather station connected, W readings arriving", "auto"),
         ("leds", "LEDs flash: red hot, blue cold, yellow hit", "manual"),
-        ("buzzers", "Buzzer on D7: high beeps (hot), low beeps (cold)", "manual"),
+        ("buzzers", "Buzzer on D7: fast beeps (hot), slower beeps (cold)", "manual"),
         ("lcd", "Weather LCD shows the hot and cold warnings", "manual"),
         ("camera", "Camera picture is live", "auto"),
     ]

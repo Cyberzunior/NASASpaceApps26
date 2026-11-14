@@ -40,7 +40,7 @@ The box under the log sends any line to any board (`I?`, `V,35`, `A,90`, `PING,D
 
 | Tab | What it does |
 |---|---|
-| Weather + LCD | live `W` readout; buttons for `BZ` (buzz D7) / `V,24` / `V,35` / `V,10` / `H,14` / `G` / `R`; a mock 16x2 LCD showing what the real LCD should say right now |
+| Weather + LCD | live `W` readout; buttons for `BZ` (buzz D7) / `V,24` / `V,35` / `V,10` / `H,14` / `G` / `R`; a mock 16x2 LCD showing what the real LCD should say right now; a box that sends custom text (`L,line1\|line2`, until `R` or **Back to weather**) |
 | Robot | hold-to-drive pad (resent at 20 Hz), speed, auto-pilot flag, `X` / `R`, radar of the `S` lines, bumpers |
 | Tower | `F` with a safety tick, `R` / `X`, F-to-K time |
 | Bench | stepper moves and servo angles through `PinTester.ino` on a spare UNO |
@@ -68,7 +68,7 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
 
 - **weather** (UNO R3, USB): `W,temp,hum,state` line arrives and parses, DHT11
   ranges sane, green LED + LCD normal, hot air turns it HOT (red LED + fast
-  high beeps), cold pack turns it COLD (blue LED + fast low beeps), back to NORMAL.
+  beeps, 100 ms), cold pack turns it COLD (blue LED + slower beeps, 200 ms), back to NORMAL.
   The single buzzer is on D7; `BZ` makes it beep for 0.5 s.
 - **robot** (UNO Q #1): `S,angle,dist,flags` line, sweep covers about +/-45 deg,
   HC-SR04 sees a hand at 10 cm, wheels forward and back together at `D,...`
