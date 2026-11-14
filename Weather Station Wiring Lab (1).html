@@ -1,0 +1,764 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Weather Station Wiring Lab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<style>
+/* Layout: 3D stage on the left, guide panel on the right; stacked with a sticky stage on phones.
+   Palette: bench-top navy stage, teal accent, solder-amber highlight. */
+:root{
+  --bg:#eef1f5; --panel:#ffffff; --panel2:#f3f6f9; --fg:#0e1726; --muted:#55627a; --line:#d5dce7;
+  --accent:#0b7a75; --accent-fg:#ffffff; --amber:#b45309; --good:#15803d; --bad:#b91c1c; --chip:#e4ebf3;
+  --stage:#0b111c; --stage-fg:#e8eefb; --stage-line:#26324a;
+  --f-head:"Space Grotesk","Segoe UI",system-ui,sans-serif; --f-body:"Inter","Segoe UI",system-ui,sans-serif; --f-mono:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#080d16; --panel:#121a29; --panel2:#18223a; --fg:#e8eefb; --muted:#9aa8c2; --line:#26324a;
+  --accent:#2dd4bf; --accent-fg:#04201d; --amber:#fbbf24; --good:#4ade80; --bad:#f87171; --chip:#1d2942; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#080d16; --panel:#121a29; --panel2:#18223a; --fg:#e8eefb; --muted:#9aa8c2; --line:#26324a;
+  --accent:#2dd4bf; --accent-fg:#04201d; --amber:#fbbf24; --good:#4ade80; --bad:#f87171; --chip:#1d2942; color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--fg);font-family:var(--f-body);font-size:15px;line-height:1.55;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:14px 28px}
+h1,h2,h3{font-family:var(--f-head);margin:0;text-wrap:balance;line-height:1.2}
+.top{display:flex;align-items:baseline;gap:12px 20px;flex-wrap:wrap;margin-bottom:12px}
+.top h1{font-size:22px}
+.top p{margin:0;color:var(--muted);font-size:13.5px;min-width:0}
+.app{display:grid;grid-template-columns:minmax(0,1fr) 410px;gap:16px;align-items:start}
+.stage{position:sticky;top:8px;background:var(--stage);border:1px solid var(--stage-line);border-radius:10px;overflow:hidden;height:calc(100vh - 90px);min-height:420px}
+#view{position:absolute;inset:0}
+#view canvas{display:block;width:100%;height:100%;touch-action:none}
+.cap{position:absolute;left:12px;top:10px;right:12px;display:flex;gap:10px;align-items:center;pointer-events:none;color:var(--stage-fg)}
+.cap b{font-family:var(--f-head);font-size:15px;background:rgba(11,17,28,.78);border:1px solid var(--stage-line);padding:5px 10px;border-radius:7px}
+.tools{position:absolute;left:10px;bottom:10px;display:flex;gap:6px;flex-wrap:wrap;right:10px}
+.tools button{background:rgba(11,17,28,.82);color:var(--stage-fg);border:1px solid var(--stage-line);border-radius:7px;padding:6px 10px;font:500 12.5px var(--f-body);cursor:pointer}
+.tools button:hover{border-color:#5eead4}
+.tools button[aria-pressed="true"]{background:#0f766e;border-color:#2dd4bf}
+.info{position:absolute;right:10px;top:46px;max-width:min(300px,70%);background:rgba(11,17,28,.9);color:var(--stage-fg);border:1px solid var(--stage-line);border-radius:8px;padding:9px 12px;font-size:12.5px;display:none}
+.info b{display:block;font-family:var(--f-head);font-size:13.5px;margin-bottom:2px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;min-width:0;overflow:hidden}
+.tabs{display:flex;border-bottom:1px solid var(--line);background:var(--panel2)}
+.tabs button{flex:1;padding:11px 6px;border:0;background:none;color:var(--muted);font:600 13.5px var(--f-body);cursor:pointer;border-bottom:3px solid transparent}
+.tabs button[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--accent);background:var(--panel)}
+.pane{padding:16px 16px 18px;display:none}
+.pane.on{display:block}
+.pane h2{font-size:19px;margin-bottom:6px}
+.pane h3{font-size:14px;margin:16px 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.pane p{margin:8px 0}
+.pane ul,.pane ol{margin:8px 0;padding-left:20px}
+.pane li{margin:4px 0}
+.dots{display:flex;gap:5px;flex-wrap:wrap;margin:2px 0 12px}
+.dots button{width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--chip);color:var(--fg);font:600 12px var(--f-mono);cursor:pointer;padding:0}
+.dots button.done{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.dots button.cur{outline:3px solid var(--amber);outline-offset:1px}
+.nav{display:flex;gap:8px;margin-top:14px}
+.btn{flex:1;padding:11px 12px;border-radius:8px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);font:600 14px var(--f-body);cursor:pointer}
+.btn.pri{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.btn:disabled{opacity:.4;cursor:default}
+.chips{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.chip{display:flex;gap:9px;align-items:flex-start;background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;font-size:13.5px;cursor:pointer;text-align:left;color:var(--fg);font-family:var(--f-body)}
+.chip i{flex:none;width:14px;height:14px;border-radius:50%;margin-top:3px;border:1px solid rgba(128,128,128,.6)}
+.chip span{min-width:0}
+.note{background:var(--panel2);border-left:4px solid var(--amber);padding:9px 12px;border-radius:6px;font-size:13.5px;margin:12px 0}
+.ok{border-left-color:var(--good)}
+.warn{border-left-color:var(--bad)}
+code,.mono{font-family:var(--f-mono);font-size:12.5px;background:var(--chip);padding:1px 5px;border-radius:4px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+.row button{padding:8px 11px;border-radius:7px;border:1px solid var(--line);background:var(--panel2);color:var(--fg);font:600 13px var(--f-body);cursor:pointer}
+.row button.on{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+label.sl{display:block;margin:12px 0 2px;font-weight:600;font-size:13.5px}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.state{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.state div{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:var(--panel2);font-size:12.5px}
+.state b{display:block;font-family:var(--f-head);font-size:15px}
+.serial{background:#0a0f18;color:#8df0c8;font:500 12px var(--f-mono);border-radius:8px;padding:9px 11px;height:92px;overflow:hidden;white-space:pre-wrap}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:8px;margin:8px 0}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+th{background:var(--panel2);font-family:var(--f-head);font-size:12px;letter-spacing:.04em;position:sticky;top:0}
+td i{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:5px;border:1px solid rgba(128,128,128,.6);vertical-align:-1px}
+details{border:1px solid var(--line);border-radius:8px;margin:8px 0;background:var(--panel2)}
+summary{padding:10px 12px;font-weight:600;cursor:pointer}
+details div{padding:0 12px 10px}
+:focus-visible{outline:3px solid var(--amber);outline-offset:2px}
+@media (max-width:960px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .stage{height:46vh;min-height:300px;top:0;z-index:5}
+}
+@media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important}}
+</style>
+
+<header class="top">
+  <h1>Weather Station Wiring Lab</h1>
+  <p>UNO R3 + 16-pin LCD + DHT11 + 4 LEDs + 2 buzzers. Build it step by step, then test it live. Drag to rotate, scroll to zoom, tap any wire or part for details.</p>
+</header>
+
+<main class="app">
+  <section class="stage" aria-label="3D breadboard view">
+    <div id="view"></div>
+    <div class="cap"><b id="capTitle">Step 1</b></div>
+    <div class="info" id="info"></div>
+    <div class="tools">
+      <button id="bReset">Reset view</button>
+      <button id="bTop">Top view</button>
+      <button id="bLabels" aria-pressed="true">Labels</button>
+      <button id="bSound" aria-pressed="false" hidden>Sound off</button>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tBuild" aria-selected="true">Build</button>
+      <button role="tab" id="tSim" aria-selected="false">Simulate</button>
+      <button role="tab" id="tWires" aria-selected="false">Wires</button>
+      <button role="tab" id="tFix" aria-selected="false">Fix it</button>
+    </div>
+
+    <div class="pane on" id="pBuild"></div>
+
+    <div class="pane" id="pSim">
+      <h2>Live simulation</h2>
+      <p>This runs the same rules as <code>weather_station.ino</code> v2. Change the temperature and watch the LEDs, buzzers and LCD react.</p>
+      <div class="row">
+        <button data-t="24" class="on">Normal 24°C</button>
+        <button data-t="35">Hot 35°C</button>
+        <button data-t="10">Cold 10°C</button>
+        <button id="bSpike">Sudden change</button>
+        <button id="bHit">Hit (yellow)</button>
+        <button id="bOver">Game over</button>
+        <button id="bDemo">Auto demo</button>
+      </div>
+      <label class="sl" for="sT">Temperature: <span id="vT">24.0</span> °C</label>
+      <input type="range" id="sT" min="0" max="45" step="0.5" value="24">
+      <label class="sl" for="sC">LCD contrast knob (the pot): <span id="vC">50</span>%</label>
+      <input type="range" id="sC" min="0" max="100" step="1" value="50">
+      <div class="note">Too low and the LCD shows only a blue block, with no text. Too high and it shows dark squares. That is exactly what you saw. Turn the real pot slowly until the letters appear.</div>
+      <div class="state">
+        <div>State<b id="stS">NORMAL</b></div>
+        <div>Blink<b id="stB">solid green</b></div>
+        <div>Sound<b id="stZ">none</b></div>
+      </div>
+      <h3>Serial monitor (115200)</h3>
+      <div class="serial" id="serial"></div>
+      <div class="note ok">Hot: above 30°C. Cold: below 18°C. It goes back to normal only after 1°C of margin (29°C and 19°C), so it does not flicker.</div>
+    </div>
+
+    <div class="pane" id="pWires"></div>
+
+    <div class="pane" id="pFix">
+      <h2>If something does not work</h2>
+      <details open><summary>Red LED never lights</summary><div>
+        <p>First, it only lights in HOT mode. Type <code>V,35</code> in the Serial Monitor (115200, Newline). Also watch the start-up self-test: red flashes once.</p>
+        <ol><li>LED backwards? The long leg (anode) goes to the resistor side, the short leg to GND.</li>
+        <li>Is the resistor in the same strip as the D5 wire?</li>
+        <li>D5 wire one hole off? D4 is blue, D6 is the buzzer.</li>
+        <li>Test the LED alone: move its resistor wire from D5 to 5V. If it lights, the LED is fine.</li></ol></div></details>
+      <details><summary>Active buzzer is silent</summary><div>
+        <ol><li>Peel the sticker off the top.</li>
+        <li>It only sounds in HOT mode (<code>V,35</code>) and in the self-test.</li>
+        <li>PN2222 flat face toward you, legs down: left is E (emitter, to GND), middle is B (base, from D6 through 1 kΩ), right is C (collector, to the buzzer minus).</li>
+        <li>Buzzer plus (long leg) goes to 5V.</li></ol></div></details>
+      <details><summary>Passive buzzer is silent</summary><div>
+        <p>It makes sound only when the code plays a tone. That happens in COLD mode (<code>V,10</code>) and in the self-test. Plus goes to D7, minus to GND.</p></div></details>
+      <details><summary>LCD shows only a blue block</summary><div>
+        <ol><li>Turn the contrast pot slowly. Use the Simulate tab to see what each setting looks like.</li>
+        <li>Check pin 5 (RW) goes to GND. If RW floats, the LCD can stay blank.</li>
+        <li>Check RS to D8, E to D9, D4 to D10, D5 to D11, D6 to D12, D7 to D13.</li></ol></div></details>
+      <details><summary>LCD says SENSOR ERROR</summary><div>
+        <p>The DHT11 data wire (S) must go to D2, plus to 5V, minus to GND. Labels on the module matter more than the pin order shown here.</p></div></details>
+      <details><summary>Arduino IDE: DHT.h: No such file or directory</summary><div>
+        <p>Open Library Manager and install <b>DHT sensor library</b> (Adafruit) and <b>Adafruit Unified Sensor</b>, then press Verify.</p></div></details>
+      <details><summary>Quick test commands</summary><div>
+        <p>Serial Monitor at 115200 baud, Newline: <code>V,35</code> hot, <code>V,10</code> cold, <code>V,24</code> normal, <code>H,14</code> hit flash, <code>G</code> game over, <code>R</code> restart.</p></div></details>
+    </div>
+  </aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+(function(){
+"use strict";
+const T=THREE, V=(x,y,z)=>new T.Vector3(x,y,z);
+const $=id=>document.getElementById(id);
+
+/* ---------- renderer, scene, camera ---------- */
+const view=$('view');
+const renderer=new T.WebGLRenderer({antialias:true,preserveDrawingBuffer:false});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+renderer.outputEncoding=T.sRGBEncoding;
+view.appendChild(renderer.domElement);
+const scene=new T.Scene(); scene.background=new T.Color(0x0b111c);
+const camera=new T.PerspectiveCamera(38,1,0.5,500);
+const controls=new T.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true; controls.dampingFactor=0.08; controls.maxPolarAngle=1.52; controls.minDistance=8; controls.maxDistance=160;
+scene.add(new T.HemisphereLight(0xdfe9ff,0x1a2233,0.62));
+const sun=new T.DirectionalLight(0xffffff,0.6); sun.position.set(25,60,40); scene.add(sun);
+const fill=new T.DirectionalLight(0x7aa2ff,0.25); fill.position.set(-40,30,-20); scene.add(fill);
+const tableMesh=new T.Mesh(new T.PlaneGeometry(260,200),new T.MeshStandardMaterial({color:0x0a0f19,roughness:.95}));
+tableMesh.rotation.x=-Math.PI/2; tableMesh.position.y=-3.35; scene.add(tableMesh);
+const grid=new T.GridHelper(260,52,0x1d2940,0x162036); grid.position.y=-3.34; scene.add(grid);
+
+function resize(){const w=view.clientWidth,h=view.clientHeight; if(!w||!h)return; renderer.setSize(w,h,false); camera.aspect=w/h; camera.updateProjectionMatrix();}
+new ResizeObserver(resize).observe(view); resize();
+
+/* ---------- helpers ---------- */
+const rowZ={a:5.5,b:4.5,c:3.5,d:2.5,e:1.5,f:-1.5,g:-2.5,h:-3.5,i:-4.5,j:-5.5,'T+':-9.2,'T-':-8.2,'B-':8.2,'B+':9.2};
+const B=(col,row)=>V(col-30.5,0,rowZ[row]);
+const AX={xr:14,zTop:-15};
+const ardW=(xl,zl)=>V(AX.xr-xl,0,AX.zTop-zl);
+function A(n){
+  if(/^\d+$/.test(n)){const k=+n; const xl=k<=7?24.5-k:14.9-(k-8); return ardW(xl,0.5);}
+  if(n==='GND_D')return ardW(8.9,0.5);
+  if(n==='5V')return ardW(12.9,20.5);
+  if(n==='A0')return ardW(18.5,20.5);
+}
+const mat=(c,o={})=>new T.MeshStandardMaterial(Object.assign({color:c,roughness:.6,metalness:.05},o));
+function box(w,h,d,m,x,y,z){const me=new T.Mesh(new T.BoxGeometry(w,h,d),m); me.position.set(x,y,z); return me;}
+function cyl(r,h,m,x,y,z,seg=20){const me=new T.Mesh(new T.CylinderGeometry(r,r,h,seg),m); me.position.set(x,y,z); return me;}
+function canvasTex(w,h,draw){const c=document.createElement('canvas'); c.width=w; c.height=h; draw(c.getContext('2d'),w,h); const t=new T.CanvasTexture(c); t.encoding=T.sRGBEncoding; t.anisotropy=8; return {tex:t,canvas:c};}
+const metal=mat(0xc3c8d0,{metalness:.8,roughness:.3});
+
+/* ---------- breadboard ---------- */
+(function(){
+  scene.add(box(63,3.3,21,mat(0xe7e2d5,{roughness:.8}),0,-1.65,0));
+  const U=40;
+  const {tex}=canvasTex(63*U,21*U,(x,W,H)=>{
+    const px=X=>(X+31.5)*U, pz=Z=>(Z+10.5)*U;
+    x.fillStyle='#ece7da'; x.fillRect(0,0,W,H);
+    x.fillStyle='#d3cdbd'; x.fillRect(0,pz(-0.7),W,1.4*U);
+    x.fillStyle='#bdb6a2'; x.fillRect(0,pz(-0.12),W,0.24*U);
+    const line=(z,c)=>{x.fillStyle=c; x.fillRect(px(-29.9),pz(z)-2,59.8*U,4);};
+    line(-10.0,'#d33'); line(-7.62,'#2563eb'); line(7.62,'#2563eb'); line(10.0,'#d33');
+    const hole=(X,Z)=>{x.fillStyle='#2b2a27'; x.fillRect(px(X)-9,pz(Z)-9,18,18); x.fillStyle='#6f6a5e'; x.fillRect(px(X)-9,pz(Z)-9,18,3);};
+    for(let c=1;c<=60;c++){const X=c-30.5; for(const r in rowZ) hole(X,rowZ[r]);}
+    x.fillStyle='#857f6e'; x.textAlign='center'; x.textBaseline='middle'; x.font='600 22px sans-serif';
+    for(let c=1;c<=60;c++) if(c===1||c%5===0){x.fillText(String(c),px(c-30.5),pz(-6.95)); x.fillText(String(c),px(c-30.5),pz(6.95));}
+    x.font='600 22px sans-serif';
+    'abcde'.split('').forEach(r=>x.fillText(r,px(-30.9),pz(rowZ[r])));
+    'fghij'.split('').forEach(r=>x.fillText(r,px(-30.9),pz(rowZ[r])));
+    x.font='700 26px sans-serif'; x.fillStyle='#d33'; x.fillText('+',px(-30.9),pz(-9.2)); x.fillText('+',px(-30.9),pz(9.2));
+    x.fillStyle='#2563eb'; x.fillText('−',px(-30.9),pz(-8.2)); x.fillText('−',px(-30.9),pz(8.2));
+  });
+  const top=new T.Mesh(new T.PlaneGeometry(63,21),new T.MeshBasicMaterial({map:tex}));
+  top.rotation.x=-Math.PI/2; top.position.y=0.01; scene.add(top);
+})();
+
+/* ---------- Arduino UNO R3 ---------- */
+(function(){
+  const pcb=mat(0x161922,{roughness:.55});
+  scene.add(box(27,0.63,21,pcb,0.5,-3.3+0.315,-25.5));
+  const hdr=mat(0x15171c,{roughness:.7});
+  const hb=(xlA,n,zl)=>{ // header strip spanning pins starting xlA (descending to xlA-(n-1))
+    const xl=xlA-(n-1)/2; const w=ardW(xl,zl); const g=box(n,2.7,1,hdr,w.x,-1.35,w.z); scene.add(g);
+    for(let i=0;i<n;i++){const p=ardW(xlA-i,zl); scene.add(box(0.5,0.04,0.5,mat(0x000000),p.x,0.02,p.z));}
+  };
+  hb(14.9,10,0.5); // SCL..8  (xl 5.9..14.9)
+  hb(24.5,8,0.5);  // 7..0
+  hb(15.9,8,20.5); // power
+  hb(23.5,6,20.5); // analog
+  const top=-3.3+0.63;
+  const w1=ardW(1.5,8.5); scene.add(box(6,3.1,5,metal,w1.x,top+1.55,w1.z));          // USB-B
+  const w2=ardW(1.8,17.8); scene.add(box(4.6,2.6,4.8,mat(0x101215),w2.x,top+1.3,w2.z)); // DC jack
+  const c1=ardW(19.5,11.2); scene.add(box(14,0.9,3,mat(0x0e0f12,{roughness:.4}),c1.x,top+.45,c1.z)); // ATmega
+  const c2=ardW(8,11); scene.add(box(3.2,0.5,3.2,mat(0x15161a),c2.x,top+.25,c2.z)); // 16U2
+  const rs=ardW(3.2,2.2); scene.add(cyl(0.9,0.9,mat(0xd33d33),rs.x,top+.45,rs.z,16));  // reset
+  const cr=ardW(13,15); scene.add(box(3.2,0.8,1.3,metal,cr.x,top+.4,cr.z));
+  const on=ardW(25,13); const onM=mat(0x22c55e,{emissive:0x22c55e,emissiveIntensity:1.2}); scene.add(box(0.6,0.3,0.6,onM,on.x,top+.15,on.z));
+  const {tex}=canvasTex(27*54,21*54,(x,W,H)=>{
+    const px=X=>(X+13)*54, pz=Z=>(Z+36)*54;
+    x.textAlign='center'; x.textBaseline='middle';
+    const used={'2':'D2 · DHT11','3':'D3','4':'D4','5':'D5','6':'D6','7':'D7','8':'D8','9':'D9','10':'D10','11':'D11','12':'D12','13':'D13'};
+    const lab=(P,t,hl)=>{ if(hl){x.fillStyle='#fbbf24'; x.beginPath(); x.roundRect?x.roundRect(px(P.x)-24,pz(P.z)-14,48,28,6):x.rect(px(P.x)-24,pz(P.z)-14,48,28); x.fill(); x.fillStyle='#1a1203';} else x.fillStyle='#d9e2f2'; x.font='700 19px sans-serif'; x.fillText(t,px(P.x),pz(P.z));};
+    const pwm=[3,5,6,9,10,11];
+    for(let k=0;k<=13;k++){const P=A(String(k)); const p2=V(P.x,0,P.z-1.6); lab(p2,(pwm.includes(k)?'~':'')+k,k>=2); }
+    const g=A('GND_D'); lab(V(g.x,0,g.z-1.6),'GND',true);
+    [['AREF',7.9],['SDA',6.9],['SCL',5.9]].forEach(([t,xl])=>{const P=ardW(xl,2.1); x.font='600 14px sans-serif'; x.fillStyle='#8da0c4'; x.fillText(t,px(P.x),pz(P.z));});
+    const pw=['NC','IOREF','RST','3V3','5V','GND','GND','VIN'];
+    pw.forEach((t,i)=>{const P=ardW(8.9+i,18.9); lab(P,t,t==='5V');});
+    for(let i=0;i<6;i++){const P=ardW(18.5+i,18.9); lab(P,'A'+i,i===0);}
+    x.fillStyle='#8da0c4'; x.font='600 15px sans-serif'; x.fillText('DIGITAL (PWM ~)',px(ardW(14,4.4).x),pz(ardW(14,4.4).z));
+    x.fillText('POWER',px(ardW(12.4,16.8).x),pz(ardW(12.4,16.8).z)); x.fillText('ANALOG IN',px(ardW(21,16.8).x),pz(ardW(21,16.8).z));
+    x.fillStyle='#e8eefb'; x.font='700 34px sans-serif'; x.fillText('ARDUINO UNO R3',px(ardW(14,9.4).x),pz(ardW(14,9.4).z));
+    x.font='600 16px sans-serif'; x.fillStyle='#8da0c4'; x.fillText('USB →',px(ardW(1.5,13.2).x),pz(ardW(1.5,13.2).z));
+  });
+  const sil=new T.Mesh(new T.PlaneGeometry(27,21),new T.MeshBasicMaterial({map:tex,transparent:true}));
+  sil.rotation.x=-Math.PI/2; sil.position.set(0.5,top+0.02,-25.5); scene.add(sil);
+})();
+
+/* ---------- registry, parts ---------- */
+const items=[]; const pick=[];
+function reg(step,id,group,o){
+  const it=Object.assign({step,id,group,holes:[],labels:[],kind:'part',title:id,text:''},o);
+  group.userData.step=step; group.userData.item=it; scene.add(group);
+  group.traverse(m=>{if(m.isMesh){m.userData.item=it; pick.push(m);}});
+  items.push(it); return it;
+}
+function sprite(text,o={}){
+  const fs=o.fs||34; const c=document.createElement('canvas'); const x=c.getContext('2d');
+  x.font=`700 ${fs}px sans-serif`; const w=Math.ceil(x.measureText(text).width)+30; c.width=w; c.height=fs+22;
+  x.font=`700 ${fs}px sans-serif`; x.fillStyle=o.bg||'rgba(251,191,36,.96)';
+  const r=14; x.beginPath(); x.moveTo(r,0); x.arcTo(w,0,w,c.height,r); x.arcTo(w,c.height,0,c.height,r); x.arcTo(0,c.height,0,0,r); x.arcTo(0,0,w,0,r); x.fill();
+  x.fillStyle=o.fg||'#1a1203'; x.textAlign='center'; x.textBaseline='middle'; x.fillText(text,w/2,c.height/2+1);
+  const t=new T.CanvasTexture(c); t.encoding=T.sRGBEncoding;
+  const sp=new T.Sprite(new T.SpriteMaterial({map:t,depthTest:false,transparent:true})); const s=o.scale||0.034; sp.scale.set(w*s,c.height*s,1); sp.renderOrder=20; return sp;
+}
+const WIRE={red:0xdc2626,black:0x1b1d24,grey:0xaab4c5,white:0xf1f5f9,purple:0xa855f7,blue:0x3b82f6,green:0x22c55e,yellow:0xfacc15,orange:0xfb923c,teal:0x22d3ee,pink:0xe879f9,amber:0xf59e0b,lgreen:0x4ade80,lblue:0x7dd3fc,lred:0xfb7185,lyel:0xfde047};
+function wire(step,id,S,E,col,o={}){
+  const g=new T.Group(); const c=WIRE[col]; const m=mat(c,{roughness:.45,emissive:c,emissiveIntensity:0});
+  const d=S.distanceTo(E); const lift=o.lift!==undefined?o.lift:Math.min(2.4+d*0.17,11); const up=1.5;
+  let pts;
+  if(o.via) pts=[S,S.clone().add(V(0,up,0)),...o.via,E.clone().add(V(0,up,0)),E];
+  else{
+    const L=(t,k)=>{const p=S.clone().lerp(E,t); p.y=k; return p;};
+    pts=[S,S.clone().add(V(0,up,0)),L(.22,Math.max(up,lift*.78)),L(.5,lift),L(.78,Math.max(up,lift*.78)),E.clone().add(V(0,up,0)),E];
+  }
+  const curve=new T.CatmullRomCurve3(pts,false,'centripetal');
+  g.add(new T.Mesh(new T.TubeGeometry(curve,Math.max(30,Math.round(d*3)),0.2,8,false),m));
+  [S,E].forEach(p=>{g.add(box(0.62,1.1,0.62,m,p.x,0.6,p.z)); g.add(box(0.14,0.7,0.14,metal,p.x,-0.2,p.z));});
+  const it=reg(step,id,g,{kind:'wire',holes:[S,E],labels:o.labels||[],title:o.title,text:o.text,color:col,wmat:m});
+  return it;
+}
+function leg(g,x,z,y0,y1,c=0xc9ced6){const m=metal; g.add(box(0.15,y1-y0,0.15,m,x,(y0+y1)/2,z));}
+function resistor(step,id,h1,h2,bands,title,text){
+  const g=new T.Group(); const y=1.0; const cx=(h1.x+h2.x)/2, z=h1.z;
+  leg(g,h1.x,z,-0.5,y); leg(g,h2.x,z,-0.5,y);
+  g.add(box(Math.abs(h2.x-h1.x),0.14,0.14,metal,cx,y,z));
+  const body=cyl(0.5,2.5,mat(0xd9b779,{roughness:.7}),cx,y,z,16); body.rotation.z=Math.PI/2; g.add(body);
+  bands.forEach((b,i)=>{const r=cyl(0.52,0.22,mat(b),cx-0.85+i*0.55,y,z,16); r.rotation.z=Math.PI/2; g.add(r);});
+  return reg(step,id,g,{holes:[h1,h2],title,text,labels:[]});
+}
+const BAND={red:0xc81e1e,brown:0x7a4a1e,black:0x111111,gold:0xd4af37};
+function led(step,id,col,ha,hc,title,text){
+  const g=new T.Group(); const cx=(ha.x+hc.x)/2, z=ha.z;
+  const m=new T.MeshStandardMaterial({color:col,transparent:true,opacity:.62,roughness:.2,metalness:0,emissive:col,emissiveIntensity:0});
+  g.add(cyl(0.98,2.0,m,cx,2.2,z,28)); const dome=new T.Mesh(new T.SphereGeometry(0.98,28,14,0,Math.PI*2,0,Math.PI/2),m); dome.position.set(cx,3.2,z); g.add(dome);
+  g.add(cyl(1.14,0.22,m,cx,1.31,z,28));
+  leg(g,ha.x,z,-0.5,1.2); leg(g,hc.x,z,-0.5,1.2);
+  g.add(box(0.16,1.3,0.16,metal,ha.x,1.85,z-0.15)); // longer anode leg stub
+  g.add(box(0.5,0.9,0.12,mat(0x222831),cx,2.2,z+0.0)).visible=false;
+  const glow=new T.Sprite(new T.SpriteMaterial({map:glowTex(),color:col,blending:T.AdditiveBlending,transparent:true,depthWrite:false,opacity:0}));
+  glow.position.set(cx,3.4,z); glow.scale.set(1,1,1); g.add(glow);
+  const light=new T.PointLight(col,0,16,2); light.position.set(cx,5,z); g.add(light);
+  const it=reg(step,id,g,{holes:[ha,hc],title,text,labels:[]}); it.led={m,glow,light}; return it;
+}
+let _glow; function glowTex(){ if(_glow)return _glow; const c=document.createElement('canvas'); c.width=c.height=128; const x=c.getContext('2d'); const gr=x.createRadialGradient(64,64,0,64,64,64); gr.addColorStop(0,'rgba(255,255,255,1)'); gr.addColorStop(.3,'rgba(255,255,255,.45)'); gr.addColorStop(1,'rgba(255,255,255,0)'); x.fillStyle=gr; x.fillRect(0,0,128,128); _glow=new T.CanvasTexture(c); return _glow;}
+
+/* ---------- components: LCD ---------- */
+const LCDC=(function(){
+  const canvas=document.createElement('canvas'); canvas.width=640; canvas.height=140; const ctx=canvas.getContext('2d');
+  const tex=new T.CanvasTexture(canvas); tex.encoding=T.sRGBEncoding; tex.anisotropy=8;
+  return {canvas,ctx,tex};
+})();
+function drawLCD(l1,l2,contrast){
+  const x=LCDC.ctx,W=640,H=140; const gr=x.createLinearGradient(0,0,0,H); gr.addColorStop(0,'#3f7bff'); gr.addColorStop(1,'#2a63e6'); x.fillStyle=gr; x.fillRect(0,0,W,H);
+  const cellA=Math.max(0,Math.min(1,(contrast-0.72)/0.2));        // too high: dark squares
+  const txtA=Math.max(0,Math.min(1,(contrast-0.22)/0.14))*(1-0.85*cellA);
+  const cw=W/16, ch=H/2;
+  for(let r=0;r<2;r++)for(let c=0;c<16;c++){
+    const X=c*cw+4,Y=r*ch+6;
+    x.fillStyle=`rgba(10,20,80,${0.05+cellA*0.75})`; x.fillRect(X,Y,cw-8,ch-12);
+  }
+  x.textAlign='center'; x.textBaseline='middle'; x.font='700 48px "IBM Plex Mono","DejaVu Sans Mono",monospace';
+  x.fillStyle=`rgba(236,243,255,${txtA})`;
+  [l1,l2].forEach((s,r)=>{s=(s+'                ').slice(0,16); for(let c=0;c<16;c++){ if(s[c]!==' ') x.fillText(s[c],c*cw+cw/2,r*ch+ch/2+3);} });
+  LCDC.tex.needsUpdate=true;
+}
+function buildLCD(step){
+  const g=new T.Group(); const p1=B(5,'a'), p16=B(20,'a');
+  const left=p1.x-3, right=left+31.5, zb=5.0, zf=zb+14.2, cx=(left+right)/2, cz=(zb+zf)/2, y=1.25;
+  g.add(box(31.5,0.6,14.2,mat(0x0f7a3b,{roughness:.5}),cx,y,cz));
+  const bez=box(28.2,1.6,9.6,mat(0x15171c,{roughness:.5}),cx,y+1.1,cz+0.3); g.add(bez);
+  const win=new T.Mesh(new T.PlaneGeometry(25.4,5.8),new T.MeshBasicMaterial({map:LCDC.tex})); win.rotation.x=-Math.PI/2; win.position.set(cx,y+1.92,cz+0.3); g.add(win);
+  g.add(box(16,0.9,1,mat(0x15171c),(p1.x+p16.x)/2,y-0.7,p1.z));
+  for(let i=0;i<16;i++){const p=B(5+i,'a'); leg(g,p.x,p.z,-0.6,y); }
+  [-1,1].forEach(sx=>[0,1].forEach(sz=>{const m=cyl(0.45,0.7,mat(0xc9ced6,{metalness:.8}),cx+sx*14.5,y+0.3,zb+0.9+sz*12.4,14); g.add(m);}));
+  const holes=[]; for(let i=0;i<16;i++)holes.push(B(5+i,'a'));
+  return reg(step,'lcd',g,{holes:[B(5,'a'),B(20,'a')],title:'16×2 LCD (HD44780, 16 pins)',text:'Its 16-pin header goes into row a, columns 5 to 20. Pin 1 is on the left. The display faces up and toward you.',labels:[{p:B(5,'a'),t:'LCD pin 1'},{p:B(20,'a'),t:'LCD pin 16'}]});
+}
+
+/* ---------- potentiometer ---------- */
+let potKnob;
+function buildPot(step){
+  const g=new T.Group(); const h=[B(24,'c'),B(25,'c'),B(26,'c')]; const cx=h[1].x,z=h[1].z;
+  h.forEach(p=>leg(g,p.x,p.z,-0.5,0.9));
+  g.add(box(4.6,2.2,4.6,mat(0x1b1d24,{roughness:.5}),cx,1.1+0.9,z-0.2));
+  potKnob=new T.Group(); potKnob.position.set(cx,3.0,z-0.2);
+  potKnob.add(cyl(1.35,1.6,mat(0x2a2f3a,{roughness:.4}),0,0.8,0,28)); potKnob.add(box(0.28,0.12,1.2,mat(0xf1f5f9),0,1.66,-0.5)); g.add(potKnob);
+  const it=reg(step,'pot',g,{holes:h,title:'10 kΩ potentiometer (contrast knob)',text:'Three legs in row c, columns 24, 25, 26. Left leg to GND, right leg to 5V, middle leg (wiper) to LCD pin 3.',labels:[{p:h[0],t:'GND'},{p:h[1],t:'middle'},{p:h[2],t:'5V'}]});
+  return it;
+}
+
+/* ---------- DHT11 ---------- */
+function buildDHT(step){
+  const g=new T.Group(); const h=[B(27,'g'),B(28,'g'),B(29,'g')]; const cx=h[1].x,z=h[1].z;
+  h.forEach(p=>leg(g,p.x,p.z,-0.5,1.0));
+  g.add(box(4.4,5.2,0.3,mat(0x1d4ed8,{roughness:.5}),cx,3.7,z));
+  const sens=mat(0x2a8ee8,{roughness:.55}); g.add(box(4.7,6.0,2.1,sens,cx,5.2,z-1.2));
+  for(let i=0;i<7;i++) g.add(box(3.6,0.14,0.06,mat(0x144a85),cx,3.2+i*0.7,z-2.28));
+  const pins=['S','+','−'];
+  return reg(step,'dht',g,{holes:h,title:'DHT11 temperature sensor (3-pin module)',text:'Legs in row g, columns 27, 28, 29. Read the tiny labels on your module: S = signal, + = power, − = ground. The order can differ.',labels:[{p:h[0],t:'S'},{p:h[1],t:'+'},{p:h[2],t:'−'}]});
+}
+
+/* ---------- buzzers, transistor ---------- */
+const buzzers={};
+function buzzer(step,id,kind,hn,hp,title,text){
+  const g=new T.Group(); const cx=(hn.x+hp.x)/2,z=hn.z;
+  leg(g,hn.x,z,-0.5,1.0); leg(g,hp.x,z,-0.5,1.0);
+  const hgt=kind==='active'?3.7:2.6;
+  g.add(cyl(2.35,hgt,mat(0x14161b,{roughness:.45}),cx,1.0+hgt/2,z,36));
+  const topY=1.0+hgt;
+  if(kind==='active'){
+    g.add(cyl(2.1,0.08,mat(0xf1f5f9,{roughness:.6}),cx,topY+0.04,z,36));
+    const {tex}=canvasTex(128,128,(x)=>{x.clearRect(0,0,128,128); x.fillStyle='#2b6cb0'; x.font='700 22px sans-serif'; x.textAlign='center'; x.fillText('+',64,28);  x.font='700 12px sans-serif'; x.fillText('REMOVE SEAL',64,62); x.fillText('AFTER WASHING',64,80);});
+    const pl=new T.Mesh(new T.PlaneGeometry(4,4),new T.MeshBasicMaterial({map:tex,transparent:true})); pl.rotation.x=-Math.PI/2; pl.position.set(cx,topY+0.1,z); g.add(pl);
+  } else {
+    g.add(cyl(0.45,0.06,mat(0x000000),cx,topY+0.03,z,20)); g.add(cyl(1.7,0.04,mat(0x1d2027),cx,topY+0.02,z,28));
+  }
+  const waves=[]; for(let i=0;i<3;i++){const w=new T.Mesh(new T.RingGeometry(0.9,1.1,48),new T.MeshBasicMaterial({color:kind==='active'?0xfb7185:0x7dd3fc,transparent:true,opacity:0,side:T.DoubleSide,depthWrite:false})); w.rotation.x=-Math.PI/2; w.position.set(cx,topY+0.6,z); g.add(w); waves.push(w);}
+  const it=reg(step,id,g,{holes:[hn,hp],title,text,labels:[{p:hn,t:'−'},{p:hp,t:'+'}]}); buzzers[kind]={waves,top:topY}; return it;
+}
+function buildPN(step){
+  const g=new T.Group(); const h=[B(48,'c'),B(49,'c'),B(50,'c')]; const cx=h[1].x,z=h[1].z;
+  h.forEach(p=>leg(g,p.x,p.z,-0.5,1.2));
+  const s=new T.Shape(); s.moveTo(-1,0); s.absarc(0,0,1,Math.PI,Math.PI*2,false); s.closePath();
+  const geo=new T.ExtrudeGeometry(s,{depth:3.0,bevelEnabled:false}); geo.rotateX(Math.PI/2); geo.translate(0,3.0,0);
+  const m=new T.Mesh(geo,mat(0x15161a,{roughness:.5})); m.position.set(cx,1.2,z); g.add(m);
+  const {tex}=canvasTex(128,96,(x)=>{x.fillStyle='#15161a'; x.fillRect(0,0,128,96); x.fillStyle='#e8eefb'; x.font='700 24px sans-serif'; x.textAlign='center'; x.fillText('PN2222',64,34); x.font='600 16px sans-serif'; x.fillText('E   B   C',64,70);});
+  const face=new T.Mesh(new T.PlaneGeometry(1.9,1.4),new T.MeshBasicMaterial({map:tex})); face.position.set(cx,2.6,z+0.02); g.add(face);
+  return reg(step,'pn2222',g,{holes:h,title:'PN2222 transistor (NPN)',text:'Flat face toward you, legs down: left E (emitter), middle B (base), right C (collector). Row c, columns 48, 49, 50.',labels:[{p:h[0],t:'E'},{p:h[1],t:'B'},{p:h[2],t:'C'}]});
+}
+
+/* ---------- build everything with steps ---------- */
+const col=(k)=>'#'+WIRE[k].toString(16).padStart(6,'0');
+const W=(step,id,S,E,c,lab,title,text,o={})=>wire(step,id,S,E,c,Object.assign({labels:lab,title:title,text:text},o));
+const tieOut=(x,zS,zE,xs)=>[V(xs,2.6,zS),V(xs,2.6,zE)];
+
+// step 1 power
+W(1,'gnd',A('GND_D'),B(33,'T-'),'black',[{p:A('GND_D'),t:'GND'},{p:B(33,'T-'),t:'blue (−) rail'}],'Black wire: Arduino GND to top blue (−) rail','The GND pin next to pin 13 on the digital header.');
+W(1,'5v',A('5V'),B(32,'T+'),'red',[{p:A('5V'),t:'5V'},{p:B(32,'T+'),t:'red (+) rail'}],'Red wire: Arduino 5V to top red (+) rail','The 5V pin is on the power header, on the far edge of the Arduino.');
+W(1,'tie_p',B(59,'T+'),B(59,'B+'),'red',[{p:B(59,'T+'),t:'top +'},{p:B(59,'B+'),t:'bottom +'}],'Red wire: top (+) rail to bottom (+) rail','Joins the two red rails so both are 5V.',{via:tieOut(0,-9.2,9.2,35.5)});
+W(1,'tie_m',B(58,'T-'),B(58,'B-'),'black',[{p:B(58,'T-'),t:'top −'},{p:B(58,'B-'),t:'bottom −'}],'Black wire: top (−) rail to bottom (−) rail','Joins the two blue rails so both are GND.',{via:tieOut(0,-8.2,8.2,33.8)});
+
+// step 2 LCD
+buildLCD(2);
+W(2,'l1',B(5,'c'),B(5,'T-'),'black',[{p:B(5,'c'),t:'pin 1 VSS'},{p:B(5,'T-'),t:'−'}],'Black: LCD pin 1 (VSS) to GND','Column 5 is LCD pin 1.');
+W(2,'l2',B(6,'c'),B(6,'T+'),'red',[{p:B(6,'c'),t:'pin 2 VDD'},{p:B(6,'T+'),t:'+'}],'Red: LCD pin 2 (VDD) to 5V','Column 6 is LCD pin 2.');
+W(2,'l5',B(9,'c'),B(9,'T-'),'black',[{p:B(9,'c'),t:'pin 5 RW'},{p:B(9,'T-'),t:'−'}],'Black: LCD pin 5 (RW) to GND','RW must be tied to GND (write only).');
+W(2,'l16',B(20,'c'),B(20,'T-'),'black',[{p:B(20,'c'),t:'pin 16 K'},{p:B(20,'T-'),t:'−'}],'Black: LCD pin 16 (K, backlight −) to GND','Column 20 is LCD pin 16.');
+resistor(2,'r_bl',B(19,'e'),B(23,'e'),[BAND.red,BAND.red,BAND.brown,BAND.gold],'220 Ω resistor for the backlight','From column 19 (LCD pin 15, A) to column 23. It protects the backlight.');
+W(2,'l15',B(23,'d'),B(23,'T+'),'red',[{p:B(23,'d'),t:'via 220 Ω'},{p:B(23,'T+'),t:'+'}],'Red: backlight + (through the 220 Ω) to 5V','Pin 15 (A) goes through the resistor, then this wire to 5V.');
+
+// step 3 pot
+buildPot(3);
+W(3,'pw_g',B(24,'e'),B(25,'T-'),'black',[{p:B(24,'e'),t:'left leg'},{p:B(25,'T-'),t:'−'}],'Black: pot left leg to GND','');
+W(3,'pw_p',B(26,'e'),B(27,'T+'),'red',[{p:B(26,'e'),t:'right leg'},{p:B(27,'T+'),t:'+'}],'Red: pot right leg to 5V','');
+W(3,'pv0',B(7,'c'),B(25,'b'),'grey',[{p:B(7,'c'),t:'pin 3 V0'},{p:B(25,'b'),t:'middle leg'}],'Grey: LCD pin 3 (V0) to pot middle leg','V0 sets the contrast. The pot middle leg is its voltage source.');
+
+// step 4 LCD data
+const dl=[['d8',8,8,'RS','purple','LCD pin 4 (RS)'],['d9',9,10,'E','white','LCD pin 6 (E)'],['d10',10,15,'D4','blue','LCD pin 11 (D4)'],['d11',11,16,'D5','green','LCD pin 12 (D5)'],['d12',12,17,'D6','yellow','LCD pin 13 (D6)'],['d13',13,18,'D7','orange','LCD pin 14 (D7)']];
+dl.forEach(([id,pin,c,nm,color,desc])=>W(4,id,A(String(pin)),B(c,'c'),color,[{p:A(String(pin)),t:'D'+pin},{p:B(c,'c'),t:nm}],`${color[0].toUpperCase()+color.slice(1)}: Arduino D${pin} to ${desc}`,`Column ${c} is ${desc}.`));
+
+// step 5 DHT
+buildDHT(5);
+W(5,'dS',A('2'),B(27,'j'),'teal',[{p:A('2'),t:'D2'},{p:B(27,'j'),t:'S'}],'Teal: Arduino D2 to DHT11 S (signal)','');
+W(5,'dV',B(28,'i'),B(28,'T+'),'red',[{p:B(28,'i'),t:'+'},{p:B(28,'T+'),t:'+'}],'Red: DHT11 + to 5V','');
+W(5,'dG',B(29,'i'),B(29,'T-'),'black',[{p:B(29,'i'),t:'−'},{p:B(29,'T-'),t:'−'}],'Black: DHT11 − to GND','');
+
+// steps 6-9 LEDs
+function ledBlock(step,id,pin,a0,ledCol,wireCol,name,resB,note){
+  W(step,id+'_sig',A(String(pin)),B(a0,'j'),wireCol,[{p:A(String(pin)),t:'D'+pin},{p:B(a0,'j'),t:'to resistor'}],`${name} signal: Arduino ${pin==='A0'?'A0':'D'+pin} to column ${a0}`,note);
+  resistor(step,id+'_r',B(a0,'i'),B(a0+4,'i'),resB,'220 Ω resistor ('+name+' LED)',`From column ${a0} to column ${a0+4}. Red, red, brown bands.`);
+  led(step,id+'_led',ledCol,B(a0+4,'g'),B(a0+5,'g'),name+' LED','Long leg (anode, +) in column '+(a0+4)+', short leg (cathode, −) in column '+(a0+5)+'.');
+  items[items.length-1].labels=[{p:B(a0+4,'g'),t:'long leg +'},{p:B(a0+5,'g'),t:'short −'}];
+  W(step,id+'_gnd',B(a0+5,'h'),B(a0+5,'T-'),'black',[{p:B(a0+5,'h'),t:'cathode'},{p:B(a0+5,'T-'),t:'−'}],`Black: ${name} LED short leg to GND`,'');
+}
+const RB=[BAND.red,BAND.red,BAND.brown,BAND.gold];
+ledBlock(6,'gr',3,2,0x22c55e,'lgreen','Green',RB,'Green means NORMAL.');
+ledBlock(7,'bl',4,8,0x3b82f6,'lblue','Blue',RB,'Blue blinks in COLD mode.');
+ledBlock(8,'rd',5,14,0xef4444,'lred','Red',RB,'Red blinks in HOT mode.');
+ledBlock(9,'yl','A0',36,0xfacc15,'lyel','Yellow',RB,'Yellow flashes for 1 second when the game takes a hit.');
+
+// step 10 passive buzzer
+buzzer(10,'bz_p','passive',B(47,'g'),B(44,'g'),'Passive buzzer (flat black)','Plus leg in column 44, minus leg in column 47.');
+W(10,'bzp_sig',A('7'),B(44,'j'),'pink',[{p:A('7'),t:'D7'},{p:B(44,'j'),t:'+'}],'Pink: Arduino D7 to passive buzzer +','The code plays a 400 Hz tone on D7.');
+W(10,'bzp_gnd',B(47,'i'),B(47,'T-'),'black',[{p:B(47,'i'),t:'−'},{p:B(47,'T-'),t:'−'}],'Black: passive buzzer − to GND','');
+
+// step 11 active buzzer + transistor
+buildPN(11);
+resistor(11,'r_q',B(45,'b'),B(49,'b'),[BAND.brown,BAND.black,BAND.red,BAND.gold],'1 kΩ resistor (transistor base)','From column 45 to column 49 (the base leg). Brown, black, red bands.');
+W(11,'q_sig',A('6'),B(45,'e'),'amber',[{p:A('6'),t:'D6'},{p:B(45,'e'),t:'to 1 kΩ'}],'Amber: Arduino D6 to the 1 kΩ resistor','');
+W(11,'q_em',B(48,'a'),B(48,'B-'),'black',[{p:B(48,'a'),t:'E'},{p:B(48,'B-'),t:'−'}],'Black: transistor E (emitter) to GND','');
+W(11,'q_col',B(50,'e'),B(53,'e'),'white',[{p:B(50,'e'),t:'C'},{p:B(53,'e'),t:'buzzer −'}],'White: transistor C (collector) to buzzer −','');
+buzzer(11,'bz_a','active',B(53,'a'),B(56,'a'),'Active buzzer (sticker on top)','Minus (short leg) in column 53, plus (long leg) in column 56. Peel the sticker off first.');
+W(11,'bza_p',B(56,'c'),B(56,'B+'),'red',[{p:B(56,'c'),t:'buzzer +'},{p:B(56,'B+'),t:'+'}],'Red: active buzzer + to 5V','');
+
+/* ---------- step definitions ---------- */
+const cam=(cx,cz,d)=>({t:V(cx,-1,cz),p:V(cx,d*0.8,cz+d*0.58)});
+const STEPS=[
+ {title:'Meet the breadboard',cam:cam(0,-6,92),body:`
+  <p>A breadboard lets you connect parts without soldering. Its holes are joined in <b>strips</b>, and knowing which holes are joined is 90% of wiring.</p>
+  <ul><li><b>Columns:</b> in one numbered column, the 5 holes <b>a–e</b> are joined together. The 5 holes <b>f–j</b> are joined together too. The middle groove keeps the two halves apart.</li>
+  <li><b>Rails:</b> the long rows at the edges (red <b>+</b> and blue <b>−</b>) are joined along the whole length. They carry 5V and GND to everything.</li></ul>
+  <p>Look at the glowing strips in the 3D view: they show one column and the rails.</p>
+  <div class="note">Rule for every part: two things are connected only when their legs or wire ends are in the <b>same column strip</b> (same half), or on the <b>same rail</b>.</div>
+  <h3>Parts list</h3>
+  <ul><li>Arduino UNO R3 and USB cable</li><li>Breadboard (this model has 60 columns; any size works, copy the layout)</li>
+  <li>16×2 LCD with 16 pins, 10 kΩ potentiometer</li><li>DHT11 module</li>
+  <li>LEDs: green, blue, red, yellow</li><li>5 × 220 Ω resistors (4 LEDs + LCD backlight), 1 × 1 kΩ</li>
+  <li>1 × PN2222 transistor, 1 active buzzer, 1 passive buzzer</li><li>About 30 male-to-male jumper wires</li></ul>
+  <div class="note ok">Unplug the USB cable while wiring. Plug it in only when a step says so.</div>`},
+ {title:'Power the rails',cam:cam(4,-14,88),body:`
+  <p>First give the breadboard power. You will use 4 wires.</p>
+  <div class="note"><b>Why four?</b> The top rails serve the back half and the LCD wires. The bottom rails serve the transistor circuit. The two short loop wires at the right end join top and bottom, so every rail has the same power.</div>
+  <p>Order: GND wire, 5V wire, then the two loop wires around the right end of the board.</p>
+  <div class="note warn"><b>Check:</b> red always means 5V, black always means GND. If 5V touches GND, the Arduino shuts down. A red and black wire should never share a strip.</div>`},
+ {title:'Plug in the LCD and its power',cam:cam(-12,2,52),body:`
+  <p>Push the LCD's 16-pin header into <b>row a, columns 5 to 20</b>. Pin 1 is on the left, pin 16 on the right.</p>
+  <p>Then add the power wires. Each LCD pin has its own column, so you connect to the same column in row c.</p>
+  <ul><li>Pin 1 (VSS) to GND, pin 5 (RW) to GND, pin 16 (K) to GND</li><li>Pin 2 (VDD) to 5V</li><li>Pin 15 (A) through a <b>220 Ω resistor</b> to 5V (the backlight)</li></ul>
+  <div class="note">Your LCD may already have a backlight resistor on its board. The extra 220 Ω is still safe.</div>`},
+ {title:'Contrast knob (potentiometer)',cam:cam(10,2,46),body:`
+  <p>The pot sets the LCD contrast. Its two outer legs go to GND and 5V, and the middle leg (the wiper) gives a voltage between them.</p>
+  <ul><li>Pot in row c, columns 24, 25, 26</li><li>Left leg to GND, right leg to 5V</li><li>Grey wire from the middle leg (column 25) to LCD pin 3 (V0, column 7)</li></ul>
+  <div class="note ok">Later, with the Arduino powered, turn the knob slowly until the letters show. See the Simulate tab to preview it.</div>`},
+ {title:'LCD data wires',cam:cam(-6,-4,72),body:`
+  <p>These 6 wires carry the text to the LCD. The LCD runs in 4-bit mode, so it needs only 4 data lines.</p>
+  <table><tr><th>Arduino</th><th>LCD pin</th></tr><tr><td>D8</td><td>4 RS (column 8)</td></tr><tr><td>D9</td><td>6 E (column 10)</td></tr><tr><td>D10</td><td>11 D4 (column 15)</td></tr><tr><td>D11</td><td>12 D5 (column 16)</td></tr><tr><td>D12</td><td>13 D6 (column 17)</td></tr><tr><td>D13</td><td>14 D7 (column 18)</td></tr></table>
+  <p>LCD pins 7 to 10 stay empty.</p>
+  <div class="note ok"><b>Test now:</b> plug in USB and upload the sketch. You should see <code>T-Minus_6 SELF TEST</code>, then the weather text.</div>`},
+ {title:'Temperature sensor (DHT11)',cam:cam(0,-6,46),body:`
+  <p>The DHT11 measures temperature and humidity. It has 3 pins.</p>
+  <ul><li>S (signal) to Arduino <b>D2</b></li><li>+ to 5V rail</li><li>− to GND rail</li></ul>
+  <div class="note warn">Wrong power polarity can destroy it. Read the printed <b>S, +, −</b> labels on your module. The order may be different from this picture.</div>
+  <p>Put it near the edge, away from the LCD, so heat from the board does not change the reading.</p>`},
+ {title:'Green LED (normal)',cam:cam(-20,-6,38),body:`
+  <p>Each LED needs a <b>220 Ω resistor</b> or it burns out. The signal goes Arduino pin, then resistor, then LED, then GND.</p>
+  <ol><li>Wire from D3 to column 2, row j</li><li>Resistor from column 2 to column 6 (row i)</li><li>LED: <b>long leg</b> in column 6, <b>short leg</b> in column 7 (row g)</li><li>Black wire from column 7 to the GND rail</li></ol>
+  <div class="note">LED backwards = does not light. The long leg (+) is on the resistor side.</div>`},
+ {title:'Blue LED (cold)',cam:cam(-14,-6,38),body:`
+  <p>Same pattern as green, shifted right by 6 columns.</p>
+  <ol><li>D4 to column 8</li><li>Resistor column 8 to column 12</li><li>LED long leg in column 12, short leg in column 13</li><li>Black wire from column 13 to GND</li></ol>`},
+ {title:'Red LED (hot)',cam:cam(-8,-6,38),body:`
+  <p>The red LED blinks in HOT mode, together with the active buzzer.</p>
+  <ol><li>D5 to column 14</li><li>Resistor column 14 to column 18</li><li>LED long leg in column 18, short leg in column 19</li><li>Black wire from column 19 to GND</li></ol>
+  <div class="note warn">Not lighting? Check the long leg first, then that the D5 wire is not one hole off (D4 is blue, D6 is the buzzer).</div>`},
+ {title:'Yellow LED (hit flash)',cam:cam(8,-8,56),body:`
+  <p>The yellow LED flashes for one second when the game tells the board that the spacecraft was hit.</p>
+  <p>Its wire starts at <b>A0</b> on the power side of the Arduino (the far edge), and goes over the board.</p>
+  <ol><li>A0 to column 36</li><li>Resistor column 36 to column 40</li><li>LED long leg in column 40, short leg in column 41</li><li>Black wire from column 41 to GND</li></ol>`},
+ {title:'Passive buzzer (cold alarm)',cam:cam(16,-4,44),body:`
+  <p>A passive buzzer only makes sound when the code sends it a tone. In COLD mode the code plays a 400 Hz beep on D7, blinking with the blue LED.</p>
+  <ul><li>D7 to the buzzer + leg (column 44)</li><li>Buzzer − leg (column 47) to GND</li></ul>`},
+ {title:'Active buzzer + transistor (hot alarm)',cam:cam(22,0,50),body:`
+  <p>The active buzzer draws more current than an Arduino pin should give, so a transistor switches it. D6 turns the transistor on, the transistor turns the buzzer on.</p>
+  <ol><li>PN2222 in row c, columns 48, 49, 50. <b>Flat face toward you</b>: E, B, C from left to right.</li>
+  <li>1 kΩ resistor from column 45 to column 49 (base). D6 wire into column 45.</li>
+  <li>E (column 48) to GND</li><li>C (column 50) to buzzer − (column 53)</li>
+  <li>Buzzer + (column 56) to 5V. Peel the sticker off.</li></ol>
+  <div class="note warn"><b>Most common mistake:</b> transistor reversed. If the buzzer stays silent, turn the transistor around so the flat face is toward you.</div>`},
+ {title:'Done: upload and test',cam:cam(0,-6,92),body:`
+  <p>Everything is wired. Now upload <code>weather_station.ino</code>.</p>
+  <ol><li>Arduino IDE: install <b>DHT sensor library</b> (Adafruit) and <b>Adafruit Unified Sensor</b>.</li>
+  <li>Board: Arduino Uno. Click Upload.</li>
+  <li><b>Self-test:</b> green, blue, red flash and both buzzers beep once. A missing flash means that part has a wiring problem.</li>
+  <li>Open the Serial Monitor (115200, Newline) and type <code>V,35</code> then <code>V,10</code> then <code>V,24</code>.</li></ol>
+  <div class="note ok">Open the <b>Simulate</b> tab to see exactly what you should observe.</div>
+  <p>Pin summary: D2 DHT11, D3 green, D4 blue, D5 red, D6 active buzzer (via transistor), D7 passive buzzer, D8–D13 LCD, A0 yellow.</p>`}
+];
+
+/* extras for step 1 (breadboard strips) */
+const extras=new T.Group(); scene.add(extras);
+(function(){
+  const ex=(x,z,w,d,c)=>{const m=new T.Mesh(new T.BoxGeometry(w,0.35,d),new T.MeshBasicMaterial({color:c,transparent:true,opacity:.55})); m.position.set(x,0.2,z); extras.add(m); return m;};
+  ex(B(12,'a').x,3.5,1.1,5.4,0x22d3ee); ex(B(12,'f').x,-3.5,1.1,5.4,0x22d3ee);
+  ex(0,-9.2,59.5,0.9,0xef4444); ex(0,-8.2,59.5,0.9,0x3b82f6); ex(0,9.2,59.5,0.9,0xef4444); ex(0,8.2,59.5,0.9,0x3b82f6);
+  extras.visible=false;
+})();
+
+/* rings + callouts for current step */
+const marks=new T.Group(); scene.add(marks); let ringMeshes=[];
+function setMarks(step){
+  while(marks.children.length)marks.remove(marks.children[0]); ringMeshes=[];
+  if(mode!=='build'||step===0||!showLabels)return;
+  const added=new Set();
+  items.filter(i=>i.step===step).forEach(it=>{
+    it.holes.forEach(h=>{const k=h.x.toFixed(1)+','+h.z.toFixed(1); if(added.has(k))return; added.add(k);
+      const r=new T.Mesh(new T.RingGeometry(0.62,0.95,32),new T.MeshBasicMaterial({color:0xfbbf24,transparent:true,opacity:.95,depthTest:false,side:T.DoubleSide})); r.rotation.x=-Math.PI/2; r.position.set(h.x,0.12,h.z); r.renderOrder=15; marks.add(r); ringMeshes.push(r);});
+    const used=new Set();
+    (it.labels||[]).forEach(l=>{const k=l.p.x.toFixed(1)+','+l.p.z.toFixed(1)+l.t; if(used.has(k))return; used.add(k); const s=sprite(l.t,{scale:0.017,fs:28}); s.position.set(l.p.x,5.2,l.p.z-0.6); marks.add(s);});
+  });
+}
+
+/* ---------- state: mode, step ---------- */
+let mode='build', cur=0, showLabels=true, goal=null;
+function applyVisibility(){
+  items.forEach(it=>{ it.group.visible = mode==='sim' ? true : it.step<=cur; });
+  extras.visible = mode==='build' && cur===0;
+}
+function setGoal(c){goal={p:c.p.clone(),t:c.t.clone()};}
+controls.addEventListener('start',()=>{goal=null;});
+
+/* ---------- Build pane ---------- */
+const pBuild=$('pBuild');
+function chipList(step){
+  return items.filter(i=>i.step===step).map(i=>{
+    const c=i.kind==='wire'?col(i.color):(i.led?'#'+i.led.m.color.getHexString():'#cbd5e1');
+    return `<button class="chip" data-id="${i.id}"><i style="background:${c}"></i><span>${i.title}</span></button>`;}).join('');
+}
+function renderBuild(){
+  const s=STEPS[cur]; const n=STEPS.length;
+  const dots=STEPS.map((_,i)=>`<button data-s="${i}" class="${i<cur?'done':''} ${i===cur?'cur':''}" aria-label="Step ${i}">${i}</button>`).join('');
+  const list=cur>0&&cur<n-1?`<h3>In this step</h3><div class="chips">${chipList(cur)}</div>`:'';
+  pBuild.innerHTML=`<div class="dots">${dots}</div><h2>${cur===0?'Start here':'Step '+cur}: ${s.title}</h2>${s.body}${list}
+   <div class="nav"><button class="btn" id="bPrev" ${cur===0?'disabled':''}>Back</button><button class="btn pri" id="bNext" ${cur===n-1?'disabled':''}>${cur===0?'Start building':'Next step'}</button></div>`;
+  $('capTitle').textContent=(cur===0?'Start':'Step '+cur+' of '+(n-2))+' · '+s.title;
+  if(cur===n-1)$('capTitle').textContent='Finished · '+s.title;
+}
+function goStep(i,anim=true){
+  cur=Math.max(0,Math.min(STEPS.length-1,i)); applyVisibility(); renderBuild(); setMarks(cur); setGoal(STEPS[cur].cam);
+  items.filter(it=>it.step===cur).forEach(it=>{it.group.userData.t0=performance.now();});
+  pBuild.parentElement.scrollTop=0;
+}
+pBuild.addEventListener('click',e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  if(b.id==='bPrev')goStep(cur-1); else if(b.id==='bNext')goStep(cur+1);
+  else if(b.dataset.s!==undefined)goStep(+b.dataset.s);
+  else if(b.dataset.id)showInfo(items.find(i=>i.id===b.dataset.id));
+});
+
+/* ---------- info card ---------- */
+const infoEl=$('info');
+function showInfo(it){
+  if(!it)return; infoEl.style.display='block';
+  infoEl.innerHTML=`<b>${it.title}</b>${it.text||''}`;
+}
+infoEl.addEventListener('click',()=>infoEl.style.display='none');
+const ray=new T.Raycaster(), mouse=new T.Vector2(); let down=null;
+renderer.domElement.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};});
+renderer.domElement.addEventListener('pointerup',e=>{
+  if(!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>5)return;
+  const r=renderer.domElement.getBoundingClientRect(); mouse.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);
+  ray.setFromCamera(mouse,camera);
+  const vis=pick.filter(m=>m.parent&&m.userData.item.group.visible);
+  const h=ray.intersectObjects(vis,false); if(h.length)showInfo(h[0].object.userData.item); else infoEl.style.display='none';
+});
+
+/* ---------- Wires tab ---------- */
+(function(){
+  const wires=items.filter(i=>i.kind==='wire');
+  const rows=wires.map((w,i)=>`<tr><td>${i+1}</td><td>${w.step}</td><td><i style="background:${col(w.color)}"></i>${w.color}</td><td>${w.title}</td></tr>`).join('');
+  const pins=[['D2','DHT11 signal (S)'],['D3','Green LED (via 220 Ω)'],['D4','Blue LED (via 220 Ω)'],['D5','Red LED (via 220 Ω)'],['D6','Active buzzer (via 1 kΩ, PN2222 transistor)'],['D7','Passive buzzer'],['D8','LCD RS (pin 4)'],['D9','LCD E (pin 6)'],['D10','LCD D4 (pin 11)'],['D11','LCD D5 (pin 12)'],['D12','LCD D6 (pin 13)'],['D13','LCD D7 (pin 14)'],['A0','Yellow LED (via 220 Ω)'],['5V','Red rail (+)'],['GND','Blue rail (−), next to pin 13']];
+  const lcd=[['1','VSS','GND'],['2','VDD','5V'],['3','V0','Pot middle leg'],['4','RS','D8'],['5','RW','GND'],['6','E','D9'],['7–10','D0–D3','Not connected'],['11','D4','D10'],['12','D5','D11'],['13','D6','D12'],['14','D7','D13'],['15','A','5V through 220 Ω'],['16','K','GND']];
+  $('pWires').innerHTML=`<h2>Every connection</h2><p>${wires.length} jumper wires in total. Tap a row in the Build tab to find a wire in 3D.</p>
+  <h3>Arduino pins</h3><div class="tw"><table><tr><th>Pin</th><th>Goes to</th></tr>${pins.map(p=>`<tr><td class="mono">${p[0]}</td><td>${p[1]}</td></tr>`).join('')}</table></div>
+  <h3>LCD pins (1 to 16, left to right)</h3><div class="tw"><table><tr><th>#</th><th>Name</th><th>Connect to</th></tr>${lcd.map(p=>`<tr><td>${p[0]}</td><td class="mono">${p[1]}</td><td>${p[2]}</td></tr>`).join('')}</table></div>
+  <h3>Components</h3><div class="tw"><table><tr><th>Part</th><th>Qty</th><th>Value</th></tr>
+   <tr><td>Resistor</td><td>5</td><td>220 Ω (red, red, brown)</td></tr><tr><td>Resistor</td><td>1</td><td>1 kΩ (brown, black, red)</td></tr>
+   <tr><td>LED</td><td>4</td><td>green, blue, red, yellow</td></tr><tr><td>Transistor</td><td>1</td><td>PN2222 (NPN)</td></tr>
+   <tr><td>Buzzers</td><td>2</td><td>1 active, 1 passive</td></tr><tr><td>Potentiometer</td><td>1</td><td>10 kΩ</td></tr><tr><td>Sensor</td><td>1</td><td>DHT11 module</td></tr><tr><td>LCD</td><td>1</td><td>16×2, 16 pins</td></tr></table></div>
+  <h3>All wires</h3><div class="tw"><table><tr><th>#</th><th>Step</th><th>Colour</th><th>Connection</th></tr>${rows}</table></div>`;
+})();
+
+/* ---------- Simulation ---------- */
+const sim={temp:24,hum:45,sensor:0,zone:0,state:0,blink:false,tBlink:0,tSpike:-1e9,over:false,lives:15,tHit:-1e9,contrast:.5,lines:['I,weather,2'],tSer:0,lcdKey:'',demo:null};
+function simState(){
+  if(sim.sensor===0){ if(sim.temp<18)sim.sensor=1; else if(sim.temp>30)sim.sensor=2; }
+  else if(sim.sensor===1&&sim.temp>19)sim.sensor=0; else if(sim.sensor===2&&sim.temp<29)sim.sensor=0;
+  sim.state=sim.sensor!==0?sim.sensor:sim.zone;
+  if(sim.sensor===0&&((sim.temp<18)||(sim.temp>30))&&!simState.again){simState.again=true; simState(); simState.again=false;}
+}
+function lcdText(now){
+  if(sim.over)return['SIGNAL LOST','GAME OVER'];
+  if(now-sim.tSpike<3000)return['TEMP SPIKE!','CHECK AREA'];
+  if(sim.state===2)return['!! HOT ZONE !!','MOVE AWAY NOW!'];
+  if(sim.state===1)return['!! COLD ZONE !!','MOVE AWAY NOW!'];
+  return['T '+sim.temp.toFixed(1)+'C NORMAL','H '+Math.round(sim.hum)+'%  L:'+sim.lives];
+}
+const ledOf=id=>items.find(i=>i.id===id).led;
+const LED={green:ledOf('gr_led'),blue:ledOf('bl_led'),red:ledOf('rd_led'),yellow:ledOf('yl_led')};
+function setLED(l,on){ l.m.emissiveIntensity=on?1.6:0; l.m.opacity=on?.95:.62; l.light.intensity=on?2.2:0; l.glow.material.opacity=on?.95:0; l.glow.scale.setScalar(on?7:1); }
+let actx=null,oscA,oscP,gA,gP,soundOn=false;
+function setSound(on){
+  soundOn=on; $('bSound').setAttribute('aria-pressed',String(on)); $('bSound').textContent=on?'Sound on':'Sound off';
+  if(on&&!actx){ try{ actx=new (window.AudioContext||window.webkitAudioContext)();
+    gA=actx.createGain(); gA.gain.value=0; oscA=actx.createOscillator(); oscA.type='square'; oscA.frequency.value=2700; oscA.connect(gA); gA.connect(actx.destination); oscA.start();
+    gP=actx.createGain(); gP.gain.value=0; oscP=actx.createOscillator(); oscP.type='square'; oscP.frequency.value=400; oscP.connect(gP); gP.connect(actx.destination); oscP.start();
+  }catch(e){actx=null;} }
+  if(actx&&actx.state==='suspended')actx.resume();
+}
+$('bSound').addEventListener('click',()=>setSound(!soundOn));
+function simTick(now){
+  if(now-sim.tBlink>=100){sim.tBlink=now; sim.blink=!sim.blink;}
+  const q=sim.over, st=sim.state;
+  setLED(LED.green,st===0&&!q); setLED(LED.blue,st===1&&sim.blink&&!q); setLED(LED.red,st===2&&sim.blink&&!q); setLED(LED.yellow,now-sim.tHit<1000);
+  const aOn=!q&&st===2&&sim.blink, pOn=!q&&st===1&&sim.blink;
+  if(actx&&soundOn){const t=actx.currentTime; gA.gain.setTargetAtTime(aOn?0.035:0,t,0.008); gP.gain.setTargetAtTime(pOn?0.035:0,t,0.008);}
+  else if(actx){const t=actx.currentTime; gA.gain.setTargetAtTime(0,t,0.01); gP.gain.setTargetAtTime(0,t,0.01);}
+  [['active',aOn],['passive',pOn]].forEach(([k,on])=>{const b=buzzers[k]; if(!b)return; b.waves.forEach((w,i)=>{
+    if(!on||mode!=='sim'&&!items.find(it=>it.id===(k==='active'?'bz_a':'bz_p')).group.visible){w.material.opacity=0;return;}
+    const ph=((now/600)+i/3)%1; w.scale.setScalar(1+ph*5); w.material.opacity=(1-ph)*0.8; });});
+  const [l1,l2]=lcdText(now); const key=l1+'|'+l2+'|'+sim.contrast.toFixed(2);
+  if(key!==sim.lcdKey){sim.lcdKey=key; drawLCD(l1,l2,sim.contrast);}
+  if(now-sim.tSer>=2000){sim.tSer=now; sim.lines.push(`W,${sim.temp.toFixed(1)},${Math.round(sim.hum)},${st}`); if(sim.lines.length>5)sim.lines.shift(); $('serial').textContent=sim.lines.join('\n');}
+  const names=['NORMAL','COLD','HOT']; $('stS').textContent=q?'GAME OVER':names[st];
+  $('stB').textContent=q?'all off':st===2?'red, 5 per sec':st===1?'blue, 5 per sec':'solid green';
+  $('stZ').textContent=q?'none':st===2?'active buzzer':st===1?'passive 400 Hz':'none';
+}
+function setTemp(t,fromSlider){ sim.temp=t; $('sT').value=t; $('vT').textContent=t.toFixed(1); simState(); document.querySelectorAll('#pSim .row button[data-t]').forEach(b=>b.classList.toggle('on',false)); }
+$('sT').addEventListener('input',e=>{sim.demo=null; setTemp(+e.target.value);});
+$('sC').addEventListener('input',e=>{sim.contrast=e.target.value/100; $('vC').textContent=e.target.value; if(potKnob)potKnob.rotation.y=(sim.contrast-0.5)*4.6;});
+document.querySelectorAll('#pSim .row button[data-t]').forEach(b=>b.addEventListener('click',()=>{sim.demo=null; sim.over=false; setTemp(+b.dataset.t); b.classList.add('on');}));
+$('bSpike').addEventListener('click',()=>{sim.tSpike=performance.now(); setTemp(Math.min(45,sim.temp+5));});
+$('bHit').addEventListener('click',()=>{sim.tHit=performance.now(); sim.lives=Math.max(0,sim.lives-1);});
+$('bOver').addEventListener('click',()=>{sim.over=!sim.over; $('bOver').textContent=sim.over?'Restart':'Game over'; if(!sim.over)sim.lives=15;});
+$('bDemo').addEventListener('click',()=>{ if(sim.demo){sim.demo=null; $('bDemo').textContent='Auto demo'; return;} sim.over=false; sim.demo={t0:performance.now()}; $('bDemo').textContent='Stop demo'; });
+function demoTick(now){
+  if(!sim.demo)return; const s=((now-sim.demo.t0)/1000)%24; const t=s<5?24:s<8?24+(s-5)*3.7:s<14?35:s<17?35-(s-14)*8:s<21?10:10+(s-21)*4.7;
+  setTemp(Math.round(t*2)/2);
+}
+
+/* ---------- tabs ---------- */
+const tabs={tBuild:'pBuild',tSim:'pSim',tWires:'pWires',tFix:'pFix'};
+function setTab(id){
+  Object.keys(tabs).forEach(t=>{$(t).setAttribute('aria-selected',String(t===id)); $(tabs[t]).classList.toggle('on',t===id);});
+  mode=id==='tSim'?'sim':'build'; $('bSound').hidden=mode!=='sim';
+  applyVisibility(); setMarks(cur); infoEl.style.display='none';
+  if(mode==='sim'){ $('capTitle').textContent='Live simulation'; setGoal(cam(0,-6,92)); }
+  else if(id==='tBuild'){ renderBuild(); setGoal(STEPS[cur].cam); }
+  else { $('capTitle').textContent=id==='tWires'?'All connections':'Fix it'; setGoal(cam(0,-6,92)); }
+}
+Object.keys(tabs).forEach(t=>$(t).addEventListener('click',()=>setTab(t)));
+$('bReset').addEventListener('click',()=>setGoal(mode==='sim'?cam(0,-6,92):STEPS[cur].cam));
+$('bTop').addEventListener('click',()=>{const c=STEPS[cur].cam; setGoal({t:c.t.clone(),p:V(c.t.x,Math.max(40,c.p.y*1.15),c.t.z+0.5)});});
+$('bLabels').addEventListener('click',e=>{showLabels=!showLabels; e.currentTarget.setAttribute('aria-pressed',String(showLabels)); setMarks(cur);});
+
+/* ---------- loop ---------- */
+camera.position.copy(STEPS[0].cam.p); controls.target.copy(STEPS[0].cam.t);
+drawLCD('T-Minus_6','SELF TEST...',0.5);
+goStep(0);
+simState();
+const clock0=performance.now();
+function loop(){
+  requestAnimationFrame(loop);
+  const now=performance.now(); const dt=Math.min(0.1,(now-(loop.last||now))/1000); loop.last=now;
+  if(goal){const k=1-Math.exp(-dt*4.5); camera.position.lerp(goal.p,k); controls.target.lerp(goal.t,k); if(camera.position.distanceTo(goal.p)<0.15&&controls.target.distanceTo(goal.t)<0.15)goal=null;}
+  controls.update();
+  const reduce=window.matchMedia&&matchMedia('(prefers-reduced-motion: reduce)').matches;
+  items.forEach(it=>{
+    const g=it.group; if(g.userData.t0){const k=Math.min(1,(now-g.userData.t0)/(reduce?1:520)); g.position.y=(1-(1-k)*(1-k))*0+ (1-k)*(1-k)*7; if(k>=1){g.position.y=0; g.userData.t0=0;}}
+    if(it.kind==='wire'){ it.wmat.emissiveIntensity = (mode==='build'&&it.step===cur&&cur>0)? (0.35+0.35*Math.sin(now/260)) : 0; }
+  });
+  ringMeshes.forEach((r,i)=>{const s=1+0.18*Math.sin(now/230+i); r.scale.set(s,s,s);});
+  if(mode==='sim'){demoTick(now);}
+  simTick(now);
+  renderer.render(scene,camera);
+}
+loop();
+setTemp(24);
+})();
+</script>
+
+</body></html>
