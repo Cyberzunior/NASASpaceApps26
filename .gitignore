@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+.venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+secrets.py
+config.local.json
+build/
+*.hex
+*.elf
+
+# test suite
+tests/.tester_settings.json
+tests/reports/
+.pytest_cache/
+
+# game logs and local settings
+logs/
+laptop/config.local.json
