@@ -216,14 +216,14 @@ def triage_weather(args):
         hot = link.line("W,", 12.0)
         hot_state = floats(split_csv(hot), 4)[3] if hot and floats(split_csv(hot), 4) else None
         check("weather: state goes to 2 (HOT) with hot air", hot_state == 2, f"last {hot}")
-        ask("weather: red LED blinks fast and active buzzer beeps", "Red LED fast blink + fast beeps?")
+        ask("weather: red LED blinks fast and the buzzer beeps high", "Red LED fast blink + fast high beeps?")
         # cold
         pause("hold a cold pack (sealed bag) on the DHT11")
         cold = link.line("W,", 12.0)
         cold_state = floats(split_csv(cold), 4)[3] if cold and floats(split_csv(cold), 4) else None
         check("weather: state goes to 1 (COLD) when cooled", cold_state == 1, f"last {cold}")
-        ask("weather: blue LED blinks and passive buzzer tone differs from active",
-            "Blue LED blink + different (low) tone?")
+        ask("weather: blue LED blinks and the buzzer beeps low",
+            "Blue LED blink + fast low beeps (lower than HOT)?")
         back = link.line("W,", 15.0)
         back_state = floats(split_csv(back), 4)[3] if back and floats(split_csv(back), 4) else None
         check("weather: returns to NORMAL (state 0) after both", back_state == 0, f"last {back}")
@@ -310,7 +310,6 @@ WIRES = {
         ("blue LED", "D4", "led"),
         ("red LED", "D5", "led"),
         ("yellow hit LED", "A0", "led"),
-        ("active buzzer (via PN2222, 1k)", "D6", "active_buzzer"),
         ("passive buzzer", "D7", "tone"),
         ("LCD RS", "D8", "lcd"), ("LCD E", "D9", "lcd"),
         ("LCD D4", "D10", "lcd"), ("LCD D5", "D11", "lcd"),

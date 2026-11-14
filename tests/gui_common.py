@@ -1,8 +1,7 @@
 """Shared plumbing for the triage GUI: serial/UDP links, settings, camera helpers.
 
-A Link owns one device connection (USB serial or UDP, line based, 115200 baud),
-reads it in a background thread and keeps the recent lines so a test can wait for
-"the next line containing X" without racing the reader (see Cursor).
+A Link owns one device connection (USB serial or UDP, line based, 115200 baud)
+and reads it in a background thread.
 """
 import json
 import os
@@ -10,7 +9,6 @@ import re
 import socket
 import threading
 import time
-from collections import deque
 
 from PyQt5 import QtCore, QtGui
 
@@ -28,15 +26,10 @@ DEVICES = [
     ("tower", "Tower (UNO Q #2)", "192.168.1.51:5005"),
     ("bench", "Bench board (PinTester)", ""),
 ]
-DEVICE_LABEL = {k: label for k, label, _ in DEVICES}
 CAMERA_URLS = [
     "http://192.168.1.60:81/stream",    # ESP32-CAM CameraWebServer
     "http://192.168.1.61:8080/video",   # phone IP Webcam
 ]
-
-
-class StopRequested(Exception):
-    """Raised inside a running test when the operator presses Stop."""
 
 
 # ------------------------------------------------------------------ settings
@@ -104,48 +97,6 @@ def list_serial_ports():
 
 
 # ------------------------------------------------------------------ link
-class Cursor:
-    """Reads a link's lines in order from 'now'. Non matching lines are consumed."""
-
-    def __init__(self, link, stop=None):
-        self.link = link
-        self.stop = stop
-        self.seq = link._current_seq()
-        self.last_t = 0.0      # arrival time (monotonic) of the last line next() returned
-
-    def next(self, match=None, timeout=2.0):
-        """Next line containing `match` (any line if None), or None after `timeout` s."""
-        cv = self.link._cv
-        end = time.monotonic() + timeout
-        with cv:
-            while True:
-                for seq, t, text in self.link._lines:
-                    if seq <= self.seq:
-                        continue
-                    self.seq = seq
-                    if match is None or match in text:
-                        self.last_t = t
-                        return text
-                if self.stop is not None and self.stop.is_set():
-                    raise StopRequested()
-                remaining = end - time.monotonic()
-                if remaining <= 0:
-                    return None
-                cv.wait(min(remaining, 0.1))
-
-    def collect(self, seconds, match=None):
-        """All matching lines for `seconds` s as [(text, arrival_time)]."""
-        out = []
-        end = time.monotonic() + seconds
-        while True:
-            remaining = end - time.monotonic()
-            if remaining <= 0:
-                return out
-            text = self.next(match, remaining)
-            if text is not None:
-                out.append((text, self.last_t))
-
-
 class Link(QtCore.QObject):
     line_received = QtCore.pyqtSignal(str)
     tx = QtCore.pyqtSignal(str)
@@ -162,9 +113,6 @@ class Link(QtCore.QObject):
         self._addr = None
         self._thread = None
         self._stop = threading.Event()
-        self._cv = threading.Condition()
-        self._seq = 0
-        self._lines = deque(maxlen=1000)    # (seq, arrival_time, text)
         self._wlock = threading.Lock()
 
     @property
@@ -266,19 +214,7 @@ class Link(QtCore.QObject):
         text = raw.decode(errors="replace").strip()
         if not text:
             return
-        with self._cv:
-            self._seq += 1
-            self._lines.append((self._seq, time.monotonic(), text))
-            self._cv.notify_all()
         self.line_received.emit(text)
-
-    # -- helpers for tests
-    def _current_seq(self):
-        with self._cv:
-            return self._seq
-
-    def cursor(self, stop=None):
-        return Cursor(self, stop)
 
     def send(self, line, quiet=False):
         """Send one text line. quiet=True keeps it out of the log (for 50 Hz streams)."""

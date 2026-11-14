@@ -1,5 +1,5 @@
 // T-Minus_6 weather station, firmware v2. ELEGOO UNO R3 (5 V). Protocol: see laptop/devio/protocol.py.
-// Lines in : I?   Z,state   V,temp   H,lives   G   R          (state 0 normal, 1 cold, 2 hot)
+// Lines in : I?   Z,state   V,temp   H,lives   G   R   BZ     (state 0 normal, 1 cold, 2 hot; BZ = 0.5 s test beep)
 // Lines out: I,weather,2   W,temp,hum,state  (every 2 s AND at once on every state change)
 // Effective state = the more severe of (DHT11 with 1 C hysteresis, the game's zone Z). V overrides the sensor for tests.
 // No delay() anywhere: the loop never waits.
@@ -18,11 +18,12 @@ enum State { NORMAL = 0, COLD = 1, HOT = 2 };      // numbers match the protocol
 State sensorState = NORMAL, zoneState = NORMAL, state = NORMAL;
 
 // Pins (do not change: they match docs/pin_map.md and the wiring diagrams)
-const int PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, ACTIVE_BUZZ = 6, PASSIVE_BUZZ = 7;
+const int PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, HIT_LED = A0, BUZZER = 7;   // one passive buzzer on D7 (+ to D7, - to GND), D6 is free
 DHT dht(PIN_DHT, DHT11);
 LiquidCrystal weatherLcd(8, 9, 10, 11, 12, 13);    // RS, E, D4, D5, D6, D7
 
-unsigned long tSensor = 0, tLcd = 0, tBlink = 0, tHit = 0;
+unsigned long tSensor = 0, tLcd = 0, tBlink = 0, tHit = 0, tBuzz = 0;
+int buzzHz = 0;                                   // what the buzzer plays now, 0 = silent
 float temp = 22.0, hum = 40.0, virtualTemp = 0.0;
 bool useVirtual = false, blinkOn = false, gameOver = false;
 int lives = 15;
@@ -86,14 +87,21 @@ void updateState() {
     sendW();                                       // and the laptop hears about it at once
   }
 }
+void setBuzz(int hz) {                             // only touches the timer when the pitch changes
+  if (hz == buzzHz) return;
+  buzzHz = hz;
+  if (hz) tone(BUZZER, hz); else noTone(BUZZER);
+}
 void outputs(unsigned long now) {
   if (now - tBlink >= 100) { tBlink = now; blinkOn = !blinkOn; }  // about 5 blinks a second
   bool quiet = gameOver;
   digitalWrite(GREEN, state == NORMAL && !gameOver);
   digitalWrite(BLUE, state == COLD && blinkOn && !quiet);
   digitalWrite(RED,  state == HOT  && blinkOn && !quiet);
-  digitalWrite(ACTIVE_BUZZ, !quiet && state == HOT && blinkOn);
-  if (!quiet && state == COLD && blinkOn) tone(PASSIVE_BUZZ, 400); else noTone(PASSIVE_BUZZ);
+  if (tBuzz && now - tBuzz < 500)          setBuzz(1000);   // BZ test beep, even in game over
+  else if (!quiet && blinkOn && state == HOT)  setBuzz(2000);   // hot: fast high beeps
+  else if (!quiet && blinkOn && state == COLD) setBuzz(400);    // cold: fast low beeps
+  else setBuzz(0);
   digitalWrite(HIT_LED, now - tHit < 1000);                       // 1 second hit flash
 }
 void handleLine(const char* s) {
@@ -102,6 +110,7 @@ void handleLine(const char* s) {
   else if (s[0] == 'V' && s[1] == ',') { useVirtual = true; virtualTemp = atof(s + 2); temp = virtualTemp; updateState(); }
   else if (s[0] == 'H' && s[1] == ',') { int n = atoi(s + 2); if (n < lives) tHit = millis(); lives = n; showLives(); }
   else if (!strcmp(s, "G"))         { gameOver = true; lives = 0; showLives(); showWeather(); }
+  else if (!strcmp(s, "BZ"))        { tBuzz = millis(); if (!tBuzz) tBuzz = 1; }
   else if (!strcmp(s, "R"))         { gameOver = false; lives = 15; useVirtual = false; zoneState = NORMAL; updateState(); showLives(); showWeather(); }
 }
 void readSerial() {                                // collects one line at a time, never blocks
@@ -116,7 +125,7 @@ void setup() {
   dht.begin();
   weatherLcd.begin(16, 2);
   pinMode(GREEN, OUTPUT); pinMode(BLUE, OUTPUT); pinMode(RED, OUTPUT);
-  pinMode(HIT_LED, OUTPUT); pinMode(ACTIVE_BUZZ, OUTPUT); pinMode(PASSIVE_BUZZ, OUTPUT);
+  pinMode(HIT_LED, OUTPUT); pinMode(BUZZER, OUTPUT);
 #if HAS_LIVES_LCD
   Wire.begin();
   byte addr = i2cPresent(0x27) ? 0x27 : (i2cPresent(0x3F) ? 0x3F : 0);   // the I2C scanner: try both addresses
