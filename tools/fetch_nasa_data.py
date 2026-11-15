@@ -212,7 +212,7 @@ def write_sources():
     for fname, url, use, status in NOTES:
         lines += ["## %s" % fname, "- URL: %s" % url, "- Fetched: %s" % today(), "- Used for: %s" % use, "- Status: %s" % status, ""]
     lines += ["## Credits shown in the game",
-              "- Radiation storms: `Source: NASA DONKI`", "- Temperature: `Source: NASA LRO Diviner`",
+              "- Radiation storms: `Source: NASA DONKI`", "- Temperature: `Source: NASA Diviner (replay)`",
               "- Asteroid warnings: `Source: NASA lunar impact monitoring`", "- Greenhouse: `Source: NASA Veggie`", ""]
     save("SOURCES.md", "\n".join(lines))
 

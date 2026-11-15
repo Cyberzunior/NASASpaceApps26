@@ -145,48 +145,6 @@ void allOff() {
     if (outMask & (1UL << p)) digitalWrite(p, LOW);
 }
 
-// ---------------------------------------------------------------- DHT11 (own bit-bang reader)
-// counts loop passes instead of microseconds, so it also works with interrupts off
-uint32_t pulseCount(int p, uint8_t level) {
-  uint32_t n = 0;
-#ifdef ARDUINO_ARCH_AVR
-  const uint32_t lim = 400UL;
-#else
-  const uint32_t lim = 40000UL;
-#endif
-  while (digitalRead(p) == level) if (++n > lim) return 0;
-  return n;
-}
-
-void cmdDHT(int p) {
-  uint8_t d[5] = {0, 0, 0, 0, 0};
-  pinMode(p, INPUT_PULLUP);
-  delay(2);
-  pinMode(p, OUTPUT); digitalWrite(p, LOW);
-  delay(20);                          // start signal: low for at least 18 ms
-  pinMode(p, INPUT_PULLUP);
-  delayMicroseconds(40);
-#ifdef ARDUINO_ARCH_AVR
-  noInterrupts();
-#endif
-  pulseCount(p, HIGH);                    // let the pull-up high end (sensor pulls low)
-  bool good = pulseCount(p, LOW) && pulseCount(p, HIGH);   // 80 us low + 80 us high answer
-  for (uint8_t i = 0; good && i < 40; i++) {
-    uint32_t lo = pulseCount(p, LOW), hi = pulseCount(p, HIGH);
-    if (!lo || !hi) { good = false; break; }
-    d[i / 8] <<= 1;
-    if (hi > lo) d[i / 8] |= 1;
-  }
-#ifdef ARDUINO_ARCH_AVR
-  interrupts();
-#endif
-  pinMode(p, INPUT_PULLUP);
-  if (!good) { err("DHT", F("timeout (no sensor answer)")); return; }
-  if ((uint8_t)(d[0] + d[1] + d[2] + d[3]) != d[4]) { err("DHT", F("checksum")); return; }
-  Serial.print(F("OK,DHT,")); Serial.print(d[2]); Serial.print('.'); Serial.print(d[3] % 10);
-  Serial.print(','); Serial.println(d[0]);
-}
-
 // ---------------------------------------------------------------- command handlers
 void cmdPing(int trig, int echo) {
   drive(trig, LOW);
@@ -364,9 +322,6 @@ void handle() {
   } else if (!strcmp(c, "PING")) {
     if ((p = pinArg(1)) < 0 || (q = pinArg(2)) < 0) return;
     cmdPing(p, q);
-  } else if (!strcmp(c, "DHT")) {
-    if ((p = pinArg(1)) < 0) return;
-    cmdDHT(p);
   } else if (!strcmp(c, "I2CSCAN")) {
     cmdI2CScan();
   } else if (!strcmp(c, "LCD")) {

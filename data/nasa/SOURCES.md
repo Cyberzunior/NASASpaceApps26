@@ -6,13 +6,13 @@ Fetched by `tools/fetch_nasa_data.py` on 2026-11-14. The game reads these files 
 - URL: https://api.nasa.gov/DONKI/FLR?startDate=<start>&endDate=<end>&api_key=<NASA_API_KEY>
 - Fetched: 2026-11-14
 - Used for: radiation storms (solar flares)
-- Status: NOT AVAILABLE (no file saved). api.nasa.gov answered HTTP 404 `{"status":404,"path":"/DONKI-API/get/FLR/"}` for every window tried on 2026-11-14 (last 30 days, 60-day windows, other months), so no flares could be fetched. Retried once the same day (all windows in the script): same 404 from the DONKI backend. The game keeps radiation storms on its built-in timer with no NASA label. Retry with `python tools/fetch_nasa_data.py --only donki --key <your key>`; the endpoint may work later.
+- Status: NOT AVAILABLE (no file saved). api.nasa.gov answered HTTP 404 `{"status":404,"path":"/DONKI-API/get/FLR/"}` for every window tried on 2026-11-14 (last 30 days, 60-day windows, other months), so no flares could be fetched. Retried once the same day (all windows in the script): same 404 from the DONKI backend. Tried again on 2026-11-15 with a personal key: still HTTP 404 from the DONKI backend (the FLR endpoint is down on NASA's side). The game keeps radiation storms on its built-in timer with no NASA label. Retry with `python tools/fetch_nasa_data.py --only donki --key <your key>`; the endpoint may work later.
 
 ## donki_sep.json
-- URL: https://api.nasa.gov/DONKI/SEP?startDate=<start>&endDate=<end>&api_key=<NASA_API_KEY>
-- Fetched: 2026-11-14
-- Used for: radiation storms (solar energetic particle events)
-- Status: NOT AVAILABLE (no file saved). The last 30 days (2026-10-15 to 2026-11-14) returned HTTP 200 with an empty list `[]`: no SEP events in that window. Wider windows were then blocked by the DEMO_KEY rate limit (HTTP 429). Retried once the same day: every window now 429s (the shared DEMO_KEY quota is exhausted). Retry with `--key <your own key>` to look further back (the API allows 60 days per call). Until a file exists the game keeps storms on its built-in timer with no NASA label.
+- URL: https://api.nasa.gov/DONKI/SEP?startDate=2026-07-18&endDate=2026-09-16&api_key=<NASA_API_KEY>
+- Fetched: 2026-11-15
+- Used for: radiation storms (solar energetic particle events): each event is one storm, in date order, 20 s long
+- Status: OK, 17 SEP events, window 2026-07-18 to 2026-09-16 (the last 30 days held no events, so the window moved back; fetched with a personal API key)
 
 ## diviner_equator.csv
 - URL: https://pds-geosciences.wustl.edu/lro/urn-nasa-pds-lro_diviner_derived1/data_derived_gcp/global_cumul_avg_cyl_00n10n_002.tab  (HTTP Range, bytes 78105713-78116560: 96 rows of the 156 MB table)
@@ -39,7 +39,7 @@ Fetched by `tools/fetch_nasa_data.py` on 2026-11-14. The game reads these files 
 - Status: OK, 33 days to harvest, about 70 W (read from the NASA Facts sheet)
 
 ## Credits shown in the game
-- Radiation storms: `Source: NASA DONKI`
-- Temperature: `Source: NASA LRO Diviner`
+- Radiation storms: `Source: NASA DONKI` (SEP events only; the flare endpoint was unavailable)
+- Temperature: `Source: NASA Diviner (replay)`
 - Asteroid warnings: `Source: NASA lunar impact monitoring`
 - Greenhouse: `Source: NASA Veggie`

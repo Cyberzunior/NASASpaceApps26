@@ -14,20 +14,26 @@ AXIS_BOOST = 5           # right trigger
 BTN_CONFIRM = 0          # A (menus)
 BTN_CAMERA = 1           # B
 BTN_AUTOPILOT = 3        # Y
+BTN_FIRE = 5             # RB: the test shot (one asteroid sequence now)
 BTN_BACK = 6             # Back / View: Hardware Check
 BTN_RESTART = 7          # Start: pause, restart
-BTN_ACTIONS = [0, 2, 4, 5]   # while playing: A scrubber, X greenhouse, LB shield boost, RB rest crew
+BTN_ACTIONS = [0, 2, 4, 9]   # while playing: A scrubber, X greenhouse, LB shield boost, RS click rest crew
 DEAD_ZONE = 0.08
 EXPO = 0.25              # stick response curve: 0 = linear, 1 = cubic
 TRIGGER_BASE = 1.0
 INPUT_HZ = 120
 RUMBLE = True
 
+# ---- Joystick on the HUD panel (J,x,y,sw: x right, y forward, -100..100)
+JOY_INVERT_X = False     # True if the stick is mounted the other way round
+JOY_INVERT_Y = False
+JOY_TIMEOUT_S = 0.3      # no J line for this long: the stick counts as centred
+
 # ---- Movement model (measure with tools/calibrate_robot.py: 2 motors and a caster turn differently from 4 wheels)
 V_MAX = 12.0             # cm/s at full stick (placeholder for the 2WD rover: re-measure)
 W_MAX = 110.0            # deg/s at full turn (placeholder for the 2WD rover: re-measure)
 TURN_GAIN = 0.6          # K in left = speed + K*turn, right = speed - K*turn
-MAX_PWM = 170            # TT motors are 6 V parts on a 9 V pack: every motor command is scaled to this
+MAX_PWM = 200            # the MB102 gives about 700 mA: every motor command is scaled to this
 INVERT_LEFT = False      # True if the left motor is wired backwards
 INVERT_RIGHT = False
 SEND_HZ = 50
@@ -59,7 +65,7 @@ WIFI_SSID = ""
 WIFI_PASSWORD = ""
 
 # ---- Base integrity
-LIVES = 15
+LIVES = 5
 
 # ---- Meters (each 0..100). Drain intervals are seconds per point.
 START_POWER = 100.0
@@ -103,16 +109,19 @@ SAMPLE_MINERAL_POWER = 10.0
 SAMPLE_SCORE = 100
 
 # ---- Asteroid strikes (the tower warns, then fires)
+STRIKE_FIRST_S = 20.0        # the first strike is this long after the run starts
 STRIKE_WARN_S = 3.0
-STRIKE_RADIUS_M = 7.0       # impact zone radius at the start of the warning (shrinks toward the impact)
+STRIKE_RADIUS_M = 7.0       # marked spot radius at the start of the warning (shrinks toward the impact)
+STRIKE_HIT_M = 3.0          # the marked spot radius at impact
+STRIKE_LEAD_M = 4.0         # the spot is marked this far ahead of the rover (the tower's LEAD_CM on screen)
+STRIKE_W_TIMEOUT_S = 8.0    # no W,3 this long after F: run the warning on the game's own timer
+STRIKE_DODGE_SPEED = 0.30   # no tower: a strike is a hit unless the rover drove faster than this fraction of full speed
+STRIKE_DODGE_SCORE = 50
 STRIKE_MIN_GAP_S = 25.0
 STRIKE_MAX_GAP_S = 60.0
 STRIKE_S_PER_DAY = 2.0        # real days between two observed impact flashes -> game seconds (clamped)
-STRIKE_K_TIMEOUT_S = 2.0      # tower said warn but K never came: resolve anyway
+STRIKE_K_TIMEOUT_S = 2.0      # tower said warn but K never came: resolve by the no-tower rule
 TOWER_MIN_FIRE_GAP_S = 2.0
-TOWER_REST_DEG = 20
-TOWER_PUSH_DEG = 100
-TOWER_PUSH_MS = 350
 
 # ---- Radiation storms (NASA DONKI)
 STORM_GAP_MIN_S = 30.0
@@ -126,31 +135,28 @@ STORM_DUR_SEP = 20.0
 STORM_DUR_DEFAULT = 15.0
 NASA_API_KEY = "DEMO_KEY"
 
-# ---- Temperature: DHT11 mapped onto the LRO Diviner range
-SENSOR_COLD_C = 10.0          # DHT11 reading that means lunar night minimum
-SENSOR_HOT_C = 45.0           # DHT11 reading that means lunar day maximum
+# ---- Temperature: always the LRO Diviner table, replayed on the lunar day clock (there is no sensor)
 THERMAL_HOT_FRAC = 0.70       # above this fraction of the night-to-day range: hot (cooling doubles power drain)
 THERMAL_COLD_FRAC = 0.30      # below this fraction: cold (heating doubles power drain)
 THERMAL_HYST = 0.03
 DIVINER_SITE = "equator"      # "equator" or "south_pole": which table sets the range
 DAY_CLOCK_S = 180.0           # one lunar day and night
 DAY_START_H = 8.0             # local lunar time (0..24, 6 = sunrise, 18 = sunset) when a run starts
-SENSOR_TIMEOUT_S = 10.0       # no valid DHT11 reading for this long: simulated temperature
+TEMP_SEND_S = 1.0             # V,tempC goes to the HUD panel this often
 
 # ---- Intro and misc
 SKIP_INTRO = False
-INTRO_S = 6.0
+INTRO_S = 5.0
 RESTART_TO_PLAY = True
 BEST_TIME = 0.0
 MASTER_VOLUME = 0.7
-POSTFX = 2
+POSTFX = 1                 # low: vignette only (0 off, 1 low, 2 full); set in Settings
 RENDER_W = 1920
 RENDER_H = 1080
 FULLSCREEN = False
 WINDOW_W = 1600
 WINDOW_H = 900
 VSYNC = True
-TARGET_FPS = 45            # the game keeps at least this many frames per second by lowering post-processing when needed
 DEMO_MODE = False
 PX_PER_M = 34.0
 VIEW_3D = True            # chase camera behind the rover; False = the top-down map

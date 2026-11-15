@@ -41,14 +41,14 @@ def main():
             print("\nTower (nobody in front of it)")
             L["tower"].allow(True)
             L["tower"].fire(test=True)
-            time.sleep(4.5)
+            time.sleep(7.0)                          # ranging, the swing down, the 3 s countdown
             evs = net.drain()
             kinds = [e.kind for e in evs if e.kind in ("tower_warn", "tower_k")]
             ok &= check("warning first, then K", kinds == ["tower_warn", "tower_k"], str(kinds))
         if L["hud"].connected:
             print("\nHUD panel")
-            temps = [e.data for e in evs if e.kind == "hud_temp"]
-            check("temperature readings arriving", bool(temps) or L["hud"].last_w is not None, str(temps[-1:]))
+            check("joystick lines arriving (J,x,y,sw)", st.joy_t > 0, "stick %s" % (st.joy,))
+            L["hud"].set_temp(118)
             L["hud"].set_meters(80, 65, 70, 40)
             L["hud"].set_lives(12)
             L["hud"].set_samples(3)

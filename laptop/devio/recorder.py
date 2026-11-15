@@ -1,5 +1,4 @@
-"""Logging: logs/YYYYMMDD_HHMMSS.log (rotated, newest LOG_KEEP kept) and a weather CSV every 5 s."""
-import csv
+"""Logging: logs/YYYYMMDD_HHMMSS.log (rotated, newest LOG_KEEP kept)."""
 import glob
 import logging
 import os
@@ -33,35 +32,3 @@ def setup(debug=False):
     if debug or path is None:
         logger.addHandler(logging.StreamHandler())
     return logger.info, path
-
-
-class WeatherCsv:
-    """time, temperature, humidity, state, every WEATHER_LOG_S while a run is on."""
-
-    def __init__(self):
-        self.f = self.w = None
-        self.t_last = -99.0
-        try:
-            os.makedirs(LOG_DIR, exist_ok=True)
-            self.f = open(os.path.join(LOG_DIR, time.strftime("weather_%Y%m%d_%H%M%S.csv")), "w", newline="")
-            self.w = csv.writer(self.f)
-            self.w.writerow(["time", "temp_c", "humidity", "state", "robot_temp_c"])
-        except OSError:
-            self.f = self.w = None
-
-    def maybe(self, wall, weather):
-        if self.w is None or wall - self.t_last < C.WEATHER_LOG_S or weather.temp is None:
-            return
-        self.t_last = wall
-        try:
-            self.w.writerow([time.strftime("%H:%M:%S"), "%.1f" % weather.temp, int(weather.hum or 0), weather.name(),
-                             "" if weather.robot_temp is None else "%.1f" % weather.robot_temp])
-            self.f.flush()
-        except (OSError, ValueError):
-            pass
-
-    def close(self):
-        try:
-            self.f.close()
-        except Exception:
-            pass

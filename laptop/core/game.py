@@ -1,5 +1,5 @@
 """The rules of a run, with no drawing and no hardware code: four meters, base integrity (hearts), lunar samples,
-asteroid strikes warned by the tower, NASA radiation storms and a thermal state from the LRO Diviner range.
+asteroid strikes warned by the tower, NASA radiation storms and a thermal state from the LRO Diviner table (replayed, no sensor).
 Talks to the devices through three small link objects and reads the mixed command from the shared state.
 Runs headless in the tests."""
 import math
@@ -49,7 +49,7 @@ class Game:
 
     # ---- lifecycle
     def reset(self, practice=False, intro=False):
-        """Back to the start with 15 hearts and full meters. Unlatches the rover, re-arms the tower, resets the HUD panel."""
+        """Back to the start with LIVES hearts and full meters. Unlatches the rover, re-arms the tower, resets the HUD panel."""
         self.practice = practice
         self.craft = start_pose()
         self.m = {"power": C.START_POWER, "oxygen": C.START_OXYGEN, "food": C.START_FOOD, "shield": C.START_SHIELD}
@@ -59,6 +59,7 @@ class Game:
         self.score = 0
         self.samples = {k: 0 for k in KINDS}
         self.strikes = 0
+        self.near_misses = 0
         self.first_fail = None
         self.speed_ms = 0.0
         self.sample = None
@@ -71,10 +72,9 @@ class Game:
         self.next_storm_t = random.uniform(C.STORM_GAP_MIN_S, C.STORM_GAP_MAX_S)
         self.strike = None
         self.strike_i = random.randrange(len(self.nasa.impacts.events)) if self.nasa.impacts.ok else 0
-        self.next_strike_t = 20.0
+        self.next_strike_t = C.STRIKE_FIRST_S
         self._acc = {"oxygen": 0.0, "food": 0.0, "power": 0.0}
         self._starve = self._night = self._stormheart = 0.0
-        self._t_virtual = -9.0
         self.fx.clear()
         self.thermal.reset()
         self.intro_on = bool(intro and not C.SKIP_INTRO)
@@ -116,9 +116,9 @@ class Game:
         return on
 
     def fire_test_asteroid(self):
-        """Ask the tower for one shot now (the same path as its test-fire button)."""
-        if not self.over and self.strike is None:
-            return self._request_strike()
+        """The test shot (joystick button, X key): one asteroid sequence now, shown without a date."""
+        if not self.over and not self.intro_on and self.strike is None:
+            return self._request_strike(test=True)
         return False
 
     def can_act(self):
@@ -169,22 +169,26 @@ class Game:
     def handle(self, ev):
         """One event from a device thread."""
         kind, d = ev.kind, ev.data
-        if kind == "hud_temp":
-            self.thermal.on_reading(d[0], d[1], self.t_wall)
-        elif kind == "tower_warn" and not self.over and not self.intro_on:
+        if self.over or self.intro_on:
+            return
+        if kind == "tower_warn":                                # W,3: the beam is down on the marked spot
             if self.strike is not None and self.strike["phase"] == "await":
                 self.strike.update(phase="warn", left=float(d[0]), mode="tower")
-            elif self.strike is None:                       # the tower's own test-fire button: no date
+            elif self.strike is None:                           # the tower's own test button: no date
                 ix, iy = self._impact_point()
-                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None, "x": ix, "y": iy}
+                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None, "x": ix, "y": iy, "vmax": 0.0, "test": True}
             else:
                 return
-            self.fx.append(("asteroid_warn", 0, 0, ""))
-            self.hud.text("ASTEROID", "INCOMING!")
+            self._warn()
             self.log("asteroid warning from the tower: %.1f s" % d[0])
-        elif kind == "tower_k" and not self.over and not self.intro_on:
-            if self.strike is None or self.strike["phase"] == "warn":
-                self._resolve_strike()
+        elif kind == "tower_k":                                 # K,1 hit, K,0 miss, bare K = not known
+            if self.strike is not None and self.strike["mode"] == "tower" and self.strike["phase"] == "warn":   # a K before W,3 is stale
+                r = d[0] if d else -1
+                self._resolve_strike(None if r < 0 else bool(r))
+
+    def _warn(self):
+        self.fx.append(("asteroid_warn", 0, 0, ""))
+        self.hud.text("ASTEROID", "INCOMING!")                  # the same warning on the HUD panel
 
     t_wall = 0.0
 
@@ -240,28 +244,51 @@ class Game:
             self.log("GAME OVER at T+%.0f s (first failure: %s)" % (self.t, self.first_fail))
 
     def _impact_point(self):
-        """Where the rock will land: ground ahead of the rover, 14 to 32 m away, within 20 degrees of its heading (inside the chase view)."""
+        """The marked spot: on the ground just ahead of the rover, like the tower's laser."""
         c = self.craft
-        a = math.radians(c.theta + random.uniform(-20.0, 20.0))
-        d = random.uniform(14.0, 32.0)
-        return c.x + math.cos(a) * d, c.y + math.sin(a) * d
+        a = math.radians(c.theta)
+        return c.x + math.cos(a) * C.STRIKE_LEAD_M, c.y + math.sin(a) * C.STRIKE_LEAD_M
 
-    def _request_strike(self):
+    def _request_strike(self, test=False):
         date = None
         imp = self.nasa.impacts
-        if imp.ok:
+        if imp.ok and not test:
             date = imp.events[self.strike_i % len(imp.events)]["date"]
         ix, iy = self._impact_point()
-        if self.tower.connected and self.tower.fire():
-            self.strike = {"phase": "await", "left": 1.5, "mode": "tower", "date": date, "x": ix, "y": iy}
+        self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy, "vmax": 0.0, "test": test}
+        if self.tower.connected and self.tower.fire(test=test):  # F sent: wait for the tower's W,3
+            self.strike.update(phase="await", left=C.STRIKE_W_TIMEOUT_S, mode="tower")
         else:                                                   # no tower: the same warning from our own timer
-            self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy}
-            self.fx.append(("asteroid_warn", 0, 0, ""))
-            self.hud.text("ASTEROID", "INCOMING!")
+            self._warn()
         return True
 
-    def _resolve_strike(self):
+    def impact_distance(self):
+        """Metres from the rover to the marked spot, or None when no impact is warned."""
+        st = self.strike
+        if not st or "x" not in st:
+            return None
+        return math.hypot(st["x"] - self.craft.x, st["y"] - self.craft.y)
+
+    def _resolve_strike(self, hit=None):
+        """hit True / False is the tower's answer (K,1 / K,0). None = no tower: a hit unless the rover drove faster than
+        STRIKE_DODGE_SPEED of full speed during the countdown."""
+        st = self.strike or {}
+        if hit is None:
+            hit = st.get("vmax", 0.0) <= C.STRIKE_DODGE_SPEED
         self.strike = None
+        self.hud.clear_text()
+        if not st.get("test"):                                  # a scheduled strike: move on to the next real impact flash
+            imp = self.nasa.impacts
+            self.strike_i += 1
+            gap = imp.gap_s(self.strike_i) if imp.ok else random.uniform(C.STRIKE_MIN_GAP_S, C.STRIKE_MAX_GAP_S)
+            self.next_strike_t = self.t + gap
+        if not hit:
+            self.near_misses += 1
+            self.score += C.STRIKE_DODGE_SCORE
+            self.fx.append(("asteroid_miss", st.get("x", self.craft.x), st.get("y", self.craft.y), ""))
+            self.toasts.append(("DODGED  +%d" % C.STRIKE_DODGE_SCORE, "ok"))
+            self.log("asteroid dodged")
+            return
         self.strikes += 1
         m = self.m
         if m["shield"] > 0:
@@ -270,9 +297,8 @@ class Game:
             self._lose_heart("strike")
             k = random.choice(METERS)
             m[k] = max(0.0, m[k] - C.STRIKE_METER_DROP)
-        self.fx.append(("hit", 0, 0, ""))
-        self.hud.clear_text()
-        self.log("asteroid strike resolved")
+        self.fx.append(("hit", self.craft.x, self.craft.y, ""))
+        self.log("asteroid hit")
 
     # ---- one frame
     def step(self, dt, wall=None):
@@ -300,12 +326,9 @@ class Game:
         driving = st.drive_enabled and abs(speed) > 0.05
 
         # thermal state and the day clock
-        hud_up = bool(getattr(self.hud, "connected", False))
-        self.thermal.update(dt, self.t_wall, hud_up)
+        self.thermal.update(dt)
         self.hud.set_zone(self.thermal.state)
-        if hud_up and self.thermal.source == "SIM" and self.t - self._t_virtual >= 2.0:
-            self._t_virtual = self.t
-            self.hud.virtual_temp(self.thermal.virtual_sensor_c())      # dead sensor: feed it the simulation
+        self.hud.set_temp(self.thermal.lunar_c)                 # the link sends V,tempC once a second while connected
         thermal_x = 2.0 if self.thermal.state != th.NORMAL else 1.0
 
         # meters
@@ -360,19 +383,15 @@ class Game:
         s = self.strike
         if s:
             s["left"] -= dt
-            if s["phase"] == "await" and s["left"] <= 0:       # the tower did not answer: warn from our own timer
+            if s["phase"] == "warn":
+                s["vmax"] = max(s["vmax"], abs(speed) if st.drive_enabled else 0.0)
+            if s["phase"] == "await" and s["left"] <= 0:       # no W,3 within 8 s of F: warn from our own timer
                 s.update(phase="warn", left=C.STRIKE_WARN_S, mode="own")
-                self.fx.append(("asteroid_warn", 0, 0, ""))
-                self.hud.text("ASTEROID", "INCOMING!")
+                self._warn()
             elif s["phase"] == "warn" and s["mode"] == "own" and s["left"] <= 0:
                 self._resolve_strike()
             elif s["phase"] == "warn" and s["mode"] == "tower" and s["left"] <= -C.STRIKE_K_TIMEOUT_S:
-                self._resolve_strike()
-            if self.strike is None:
-                imp = self.nasa.impacts
-                self.strike_i += 1
-                gap = imp.gap_s(self.strike_i) if imp.ok else random.uniform(C.STRIKE_MIN_GAP_S, C.STRIKE_MAX_GAP_S)
-                self.next_strike_t = self.t + gap
+                self._resolve_strike()                          # K never came: the no-tower rule
 
         # first meter to fail, and the hearts it costs
         for k in METERS:
@@ -410,6 +429,6 @@ class Game:
 
     def results(self):
         ff = self.first_fail or ""
-        return {"time": self.t, "score": self.score, "samples": dict(self.samples), "strikes": self.strikes,
+        return {"time": self.t, "score": self.score, "samples": dict(self.samples), "strikes": self.strikes, "near_misses": self.near_misses,
                 "first_fail": ff, "first_fail_label": LABELS.get(ff, "none"), "why": WHY.get(ff, ""),
                 "nasa": self.nasa.used()}

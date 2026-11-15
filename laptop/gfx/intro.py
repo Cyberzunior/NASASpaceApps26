@@ -173,6 +173,7 @@ class Intro:
 
     def draw(self, surf, t):
         W, H = C.RENDER_W, C.RENDER_H
+        real, t = t, t * 6.0 / C.INTRO_S                         # the shot is authored on 6 s and played in INTRO_S (5 s)
         dt = max(0.0, min(0.1, t - self.last_t))
         self.last_t = t
         surf.fill((0, 0, 0))
@@ -213,8 +214,8 @@ class Intro:
             fonts.text(surf, "Keep the outpost alive. Collect samples. Watch the sky.", (W // 2, int(H * 0.30)), 42, K.WHITE, bold=True,
                        anchor="center", alpha=a, shadow=True, track=1)
         fonts.text(surf, "press any key to skip", (W - 30, H - 36), 16, K.DIM, anchor="bottomright")
-        if t > C.INTRO_S - 0.5:                                  # the caller blends the intro into the game with this alpha
-            return int(255 * max(0.0, 1.0 - (t - (C.INTRO_S - 0.5)) / 0.5))
+        if real > C.INTRO_S - 0.5:                               # the caller blends the intro into the game with this alpha
+            return int(255 * max(0.0, 1.0 - (real - (C.INTRO_S - 0.5)) / 0.5))
         return int(255 * min(1.0, t / 0.6))
 
     def update(self, dt):

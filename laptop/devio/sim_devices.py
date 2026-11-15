@@ -2,8 +2,8 @@
 (so the real link code runs), the tower and the HUD panel over a fake serial port (so the real handshake runs).
 
 SimRobot integrates the SAME model as the game, has the firmware's 300 ms timeout and the X/R latch, and records the wheel
-values and camera pan it was given. SimTower answers F with W,secs then K. SimHud is the HUD panel firmware: it keeps the
-LCD text, LEDs, buzzer and OLED numbers the real one would show, so the tests can check them."""
+values and camera pan it was given. SimTower answers F with W,secs then K,1 or K,0. SimHud is the HUD panel firmware: it
+keeps the LCD text, LEDs, buzzer and OLED numbers the real one would show and sends the joystick as J,x,y,sw."""
 import collections
 import math
 import socket
@@ -118,7 +118,8 @@ class SimRobot(_UdpDevice):
 
 
 class SimTower(threading.Thread):
-    """Tower firmware: F (or its button) -> W,3 warning, a wait, the push, then K. Over a fake serial port."""
+    """Tower firmware: F (or its button) -> W,3 once the beam is down, a 3 s countdown, then K,1 (the rover is still in the
+    marked spot) or K,0. `rover_in_spot` stands in for the distance reading. Over a fake serial port."""
     role = "tower"
 
     def __init__(self, hub_port=None, k_ms=None, warn_s=None):
@@ -127,10 +128,10 @@ class SimTower(threading.Thread):
         self.stop_flag = threading.Event()
         self.k_delay = (C.SIM_TOWER_K_MS if k_ms is None else k_ms) / 1000.0
         self.warn_s = 3.0 if warn_s is None else warn_s       # the real tower waits 3 s; tests shorten it
-        self.armed = True
+        self.rover_in_spot = True                             # callable or bool: is the rover still in the marked spot?
+        self.range_cm = 60.0
         self.last_fire = -99.0
-        self.balls = 0
-        self.tune = (C.TOWER_REST_DEG, C.TOWER_PUSH_DEG, C.TOWER_PUSH_MS)
+        self.shots = self.jiggles = self.ups = 0
         self.pending = []
         self.rx = bytearray()
         self.sent = []
@@ -143,7 +144,7 @@ class SimTower(threading.Thread):
         self._shot(now())
 
     def _shot(self, t):
-        if self.armed and t - self.last_fire >= 1.5:
+        if not self.pending and t - self.last_fire >= 1.5:
             self.last_fire = t
             self.out("W,%d" % round(self.warn_s))
             self.pending.append(t + self.warn_s + self.k_delay)
@@ -163,20 +164,21 @@ class SimTower(threading.Thread):
                 self.out(P.encode("Q", m[1], m[2]))
             elif k == "F":
                 self._shot(now())
-            elif k == "X":
-                self.armed = False
+            elif k == "JIGGLE":
+                self.jiggles += 1
+            elif k == "UP":
+                self.ups += 1
             elif k == "R":
-                self.armed = True
-            elif k == "TUNE":
-                self.tune = m[1:]
+                self.out("R,%.0f" % self.range_cm)
 
     def run(self):
         while not self.stop_flag.is_set():
             t = now()
             while self.pending and self.pending[0] <= t:
                 self.pending.pop(0)
-                self.balls += 1
-                self.out("K")
+                self.shots += 1
+                hit = self.rover_in_spot() if callable(self.rover_in_spot) else self.rover_in_spot
+                self.out("K,%d" % (1 if hit else 0))
             time.sleep(0.01)
 
     def stop(self):
@@ -212,19 +214,17 @@ class FakeSerial:
 
 
 class SimHud(threading.Thread):
-    """HUD panel firmware (UNO Q) in Python. Zone Z sets the state; V is a simulated temperature; the DHT11 can be
-    killed with kill_sensor() (then W is not sent unless V is active, with humidity -1 so the laptop knows it is not real)."""
+    """HUD panel firmware (UNO Q) in Python. Z sets the hot / cold state, V is the lunar temperature the laptop sends once
+    a second, and the joystick goes out as J,x,y,sw every 33 ms (set it with set_stick())."""
     role = "hud"
 
     def __init__(self):
         super().__init__(daemon=True, name="sim-hud")
         self.port = FakeSerial(self)
         self.stop_flag = threading.Event()
-        self.air = 23.0
-        self.hum = 40
-        self.sensor_ok = True
-        self.virtual = None
-        self.t_virtual = -9.0
+        self.stick = (0, 0, 0)                     # x, y, sw
+        self.temp_c = None
+        self.temps = 0
         self.zone = 0
         self.lives = C.LIVES
         self.samples = 0
@@ -234,14 +234,11 @@ class SimHud(threading.Thread):
         self.pickups = 0
         self.chirps = 0
         self.rx = bytearray()
-        self.t_w = 0.0
+        self.t_j = 0.0
         self.got = []
 
-    def set_air(self, c):
-        self.air = c
-
-    def kill_sensor(self, dead=True):
-        self.sensor_ok = not dead
+    def set_stick(self, x=0, y=0, sw=0):
+        self.stick = (int(x), int(y), int(sw))
 
     def feed(self, data):
         self.rx += data
@@ -250,22 +247,15 @@ class SimHud(threading.Thread):
             self.rx = bytearray(rest)
             self._line(line.decode("ascii", "ignore").strip())
 
-    def _send_w(self):
-        if self.sensor_ok:
-            self.port.feed_from_device("W,%.1f,%d,%d" % (self.air, self.hum, self.zone))
-        elif now() - self.t_virtual < 4.0 and self.virtual is not None:
-            self.port.feed_from_device("W,%.1f,-1,%d" % (self.virtual, self.zone))
-        self.t_w = now()
-
     def lcd(self):
         if self.over:
             return ("OUTPOST LOST", "")
         if self.text is not None:
             return self.text
         if self.zone == 2:
-            return ("!! HOT !!", "COOLING")
+            return ("!! HOT !!", "COOLING %dC" % round(self.temp_c or 0))
         if self.zone == 1:
-            return ("!! COLD !!", "HEATING")
+            return ("!! COLD !!", "HEATING %dC" % round(self.temp_c or 0))
         p, o, f, s = self.meters
         return ("PWR %-3d O2 %-3d" % (p, o), "FOOD %-3d SHLD %-3d" % (f, s))
 
@@ -290,7 +280,7 @@ class SimHud(threading.Thread):
         elif k == "Z":
             self.zone = m[1]
         elif k == "V":
-            self.virtual, self.t_virtual = m[1], now()
+            self.temp_c, self.temps = m[1], self.temps + 1
         elif k == "H":
             self.lives = m[1]
         elif k == "E":
@@ -300,13 +290,14 @@ class SimHud(threading.Thread):
         elif k == "G":
             self.over = True
         elif k == "R":
-            self.over, self.lives, self.samples, self.virtual, self.zone, self.text = False, C.LIVES, 0, None, 0, None
+            self.over, self.lives, self.samples, self.zone, self.text = False, C.LIVES, 0, 0, None
 
     def run(self):
         while not self.stop_flag.is_set():
-            if now() - self.t_w >= 1.0:
-                self._send_w()
-            time.sleep(0.02)
+            if now() - self.t_j >= 0.033:
+                self.t_j = now()
+                self.port.feed_from_device("J,%d,%d,%d" % self.stick)
+            time.sleep(0.01)
 
     def stop(self):
         self.stop_flag.set()

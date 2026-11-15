@@ -22,7 +22,7 @@ def _json(name):
 
 class Diviner:
     """LRO Diviner bolometric temperature (C) against local lunar time (hours 0..24) for one site."""
-    SOURCE = "NASA LRO Diviner"
+    SOURCE = "NASA Diviner (replay)"
 
     def __init__(self, site=None):
         self.ok, self.t_min, self.t_max, self.table = False, -170.0, 115.0, []
@@ -57,16 +57,6 @@ class Diviner:
                 lo += 1
             (h0, t0), (h1, t1) = tb[lo], tb[lo + 1]
         return t0 + (t1 - t0) * (hour - h0) / ((h1 - h0) or 1.0)
-
-    def from_sensor(self, c):
-        """DHT11 reading -> lunar surface temperature: SENSOR_COLD_C is the night minimum, SENSOR_HOT_C the day maximum."""
-        f = (c - C.SENSOR_COLD_C) / ((C.SENSOR_HOT_C - C.SENSOR_COLD_C) or 1.0)
-        f = max(0.0, min(1.0, f))
-        return self.t_min + f * (self.t_max - self.t_min)
-
-    def to_sensor(self, lunar):
-        f = (lunar - self.t_min) / ((self.t_max - self.t_min) or 1.0)
-        return C.SENSOR_COLD_C + max(0.0, min(1.0, f)) * (C.SENSOR_HOT_C - C.SENSOR_COLD_C)
 
 
 def _date(text):
@@ -127,7 +117,7 @@ class Impacts:
     def __init__(self):
         raw = (_json("meo_impacts.json") or {}).get("impacts", [])
         self.fetched = FETCHED.get("meo_impacts.json")
-        self.events = [e for e in raw if _date(e.get("date"))]
+        self.events = sorted((e for e in raw if _date(e.get("date"))), key=lambda e: _date(e["date"]))
         self.ok = len(self.events) >= 5
 
     def gap_s(self, i):
@@ -167,7 +157,7 @@ class Nasa:
         if self.storms.ok:
             out.append("NASA DONKI: solar flares and SEP events (radiation storms)%s" % tag(self.storms.fetched))
         if self.diviner.ok:
-            out.append("NASA LRO Diviner: lunar surface temperatures%s" % tag(self.diviner.fetched))
+            out.append("NASA LRO Diviner: lunar surface temperatures, replayed%s" % tag(self.diviner.fetched))
         if self.impacts.ok:
             out.append("NASA lunar impact monitoring: impact flashes (asteroid strikes)%s" % tag(self.impacts.fetched))
         if self.veggie.ok:

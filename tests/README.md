@@ -8,7 +8,7 @@ Headless, no hardware, about a minute:
     pytest tests                         # same tests with pytest (pip install pytest)
 
 `test_model` (mixer, dead zone, movement model, calibration), `test_protocol_config` (every line, garbage, settings file),
-`test_game_rules` (hits, protection, game over, asteroid sequence, weather, zones, auto-pilot dodge 10 of 10),
+`test_game_rules` (hits, protection, game over, asteroid sequence, thermal zones, auto-pilot),
 `test_devices` (discovery, RTT, failsafe, latch, tower safety, unplug and replug over real loopback sockets),
 `test_firmware_bridges` (static checks of the sketches, UNO Q bridge self-tests), `test_app_flow` (the whole game in `--sim`).
 Soak: `python laptop/tools/soak.py --demos 3`.
@@ -66,18 +66,16 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
 
 ## What each board gets
 
-- **weather** (UNO R3, USB): `W,temp,hum,state` line arrives and parses, temperature
-  sane (no DHT11 now: 24 C +/- a swing set by the pot on A1), green LED + LCD normal, hot air turns it HOT (red LED + fast
-  beeps, 100 ms), cold pack turns it COLD (blue LED + slower beeps, 200 ms), back to NORMAL.
-  The single buzzer is on D6; `BZ` makes it beep for 0.5 s.
-- **robot** (UNO Q #1): `S,angle,dist,flags` line, sweep covers about +/-45 deg,
-  HC-SR04 sees a hand at 10 cm, wheels forward and back together at `D,...`
-  (wheels on blocks!), bumpers send `B,L` / `B,R`, status LED with auto-pilot.
-- **tower** (UNO Q #2): armed LED on, `F` answered by `K`, exactly one ball
-  drops, board does not reset, ball flight 2-3 s.
+- **weather** (the HUD panel, UNO Q, USB; the command keeps its old name): `I?` and the ping, the joystick line
+  `J,x,y,sw` (centre, forward, right, button), LCD meters, OLED hearts and samples, the yellow pickup blink and chirp,
+  hot (red LED, 2000 Hz beeps) and cold (blue LED, 400 Hz beeps), and `V,tempC` on the LCD.
+- **robot** (UNO Q, Wi-Fi): each wheel alone, both forward and back, a right turn, the camera pan (`C,angle`),
+  the 300 ms stop, bumpers `B,L` / `B,R`. Wheels on blocks.
+- **tower** (UNO R3, USB): `I?`, pings answered during a sequence, `R` distance reading, `J` jiggle, `F` gives `W,3`
+  then `K,1` with the rover in the spot and `K,0` when it leaves, the test button, `Z`.
 - **wiring**: upload `PinTester.ino` to a spare UNO, connect the harness, and it
   steps through every wire of the chosen board (weather / robot / tower):
-  LEDs, buzzers, DHT, buttons, ultrasonic, servos, stepper, motors, LCD, I2C.
+  LEDs, buzzer, joystick, buttons, HC-SR04, servo, steppers, motors, LCD, I2C.
 - **camera**: opens the ESP32-CAM or phone stream, checks 60 frames flow,
   resolution near 320x240 and at least 5 fps (doc wants 15-20).
 - **gamepad**: lists the controller, samples axes and buttons for 4 s.
@@ -85,8 +83,8 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
 ## Safety
 
 - Robot on blocks for drive checks; Esc/Ctrl+C stops the script.
-- UNO Q pins are 3.3 V: HC-SR04 ECHO needs the 1k + 2k divider.
-- Keep the tower pointed away from people; `F` drops a real ball.
-- The weather station has no DHT11 any more: the pot on A1 (or a NASA solar flare picked by it in the game) sets the swing.
+- UNO Q pins are 3.3 V: the joystick and the OLED run from 3V3, never 5 V on an input.
+- The tower's green laser is always on: never aim it at a face, keep the idle beam on empty ceiling.
+- Power the tower up, and connect the laptop to it, with the beam straight up (the UNO R3 resets when the port opens).
 - UNO R3 resets when the serial port opens: the script waits 2 s for you.
 - Venue Wi-Fi often isolates devices: use the phone hotspot.

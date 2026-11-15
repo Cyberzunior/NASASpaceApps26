@@ -47,7 +47,10 @@ class SharedState:
         # input thread
         self.stick = (0.0, 0.0)          # (speed, turn) after dead zone and curve
         self.raw_axes = []
-        self.keys = (0.0, 0.0)           # keyboard fallback, written by the main loop
+        self.keys = (0.0, 0.0)           # keyboard (W A S D / arrows), written by the main loop
+        self.joy = (0.0, 0.0)            # HUD panel joystick (speed, turn), written by the HUD link
+        self.joy_t = -9.0                # when the last J line arrived
+        self.joy_sw = False
         self.pad = None                  # pygame joystick, set by the main loop
         # mixer
         self.drive_enabled = False       # False in menus, pause, game over: the robot gets zero

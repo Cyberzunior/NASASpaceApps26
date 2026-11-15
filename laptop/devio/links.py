@@ -158,7 +158,7 @@ class RobotLink(Link):
         super().__init__(*a)
         self.latched = False
         self.latch_confirmed = False
-        self.front_stop = False            # kept for the simulators: there is no distance sensor any more
+        self.front_stop = False            # always False: the rover has no distance finder
         self.last_drive = None
         self.pan_deg = 0
         self._t_x = 0.0
@@ -203,51 +203,61 @@ class RobotLink(Link):
 
 
 class TowerLink(Link):
-    """The asteroid tower over USB serial. F asks for a shot; the tower answers W,3 (warning), fires, then K."""
+    """The asteroid tower (UNO R3) over USB serial. F runs one sequence: the tower finds the rover, swings the laser
+    down, answers W,3, and 3 s later K,1 (hit) or K,0 (miss). J jiggles the servo, Z swings the beam up, R asks for one
+    distance reading (answered R,cm). The tower answers pings during a sequence, so it never shows as lost."""
     role = "tower"
 
     def __init__(self, *a):
         super().__init__(*a)
-        self.armed = True
+        self.armed = True                  # laptop side only (emergency stop): the tower has no armed state
         self.allowed = False
         self.last_fire = -99.0
         self.last_k = -99.0
+        self.last_range = None
 
     def allow(self, ok):
         self.allowed = ok
 
     def set_armed(self, on):
         self.armed = on
-        self.send("R" if on else "X")
+        if not on:
+            self.send("Z")                 # emergency stop: beam back up
 
     def can_fire(self):
         return self.connected and self.armed and self.allowed and now() - self.last_fire >= C.TOWER_MIN_FIRE_GAP_S
 
     def fire(self, test=False):
-        """Safety: only while playing (allowed), armed, and 2 s after the previous F."""
+        """Safety: only while playing (allowed) or as a test shot, and 2 s after the previous F."""
         if not (self.connected and self.armed and (self.allowed or test)) or now() - self.last_fire < C.TOWER_MIN_FIRE_GAP_S:
             return False
         self.last_fire = now()
         return self.send("F")
 
-    def tune(self, rest, push, ms):
-        return self.send(P.encode("T", int(rest), int(push), int(ms)))
+    def jiggle(self):
+        return self.send("J")
+
+    def beam_up(self):
+        return self.send("Z")
+
+    def ask_range(self):
+        return self.send("R")
 
     def handle(self, msg):
         if msg[0] == "WARN":
             self.bus.post("tower_warn", msg[1])
         elif msg[0] == "K":
             self.last_k = now()
-            self.bus.post("tower_k")
-
-    def resync(self):
-        self.tune(C.TOWER_REST_DEG, C.TOWER_PUSH_DEG, C.TOWER_PUSH_MS)
-        self.send("R" if self.armed else "X")
+            self.bus.post("tower_k", msg[1])
+        elif msg[0] == "RANGE":
+            self.last_range = msg[1]
+            self.bus.post("tower_range", msg[1])
 
 
 class HudLink(Link):
-    """The HUD panel (UNO Q) over USB serial: LCD, OLED, LEDs, buzzer, DHT11. Same ping scheme as the other links,
-    so a pulled cable or a dead board shows as lost within LINK_TIMEOUT_S."""
+    """The HUD panel (UNO Q) over USB serial: LCD, OLED, LEDs, buzzer, joystick. Same ping scheme as the other links,
+    so a pulled cable or a dead board shows as lost within LINK_TIMEOUT_S. The joystick (J,x,y,sw every 33 ms) goes
+    straight into the shared state for the mixer; a press of its button is posted once as joy_button."""
     role = "hud"
     METER_HZ = 5.0
 
@@ -258,10 +268,11 @@ class HudLink(Link):
         self.samples = 0
         self.over = False
         self.meters = None
+        self.temp_c = None
         self._sent = None
         self._t_meters = 0.0
+        self._t_temp = 0.0
         self._zone_sent, self._t_zone = None, 0.0
-        self.last_w = None
 
     def tick(self):
         super().tick()
@@ -273,12 +284,19 @@ class HudLink(Link):
             if self.meters is not None and self.meters != self._sent and t - self._t_meters >= 1.0 / self.METER_HZ:
                 self._t_meters, self._sent = t, self.meters
                 self.send(P.encode("M", *self.meters))
+            if self.temp_c is not None and t - self._t_temp >= C.TEMP_SEND_S:      # V,tempC once a second
+                self._t_temp = t
+                self.send(P.encode("V", "%.0f" % self.temp_c))
 
     def set_meters(self, power, oxygen, food, shield):
         self.meters = tuple(int(round(max(0, min(100, v)))) for v in (power, oxygen, food, shield))
 
     def set_zone(self, z):
         self.zone = int(z)
+
+    def set_temp(self, c):
+        """The lunar surface temperature (NASA Diviner replay). Sent as V,tempC once a second while connected."""
+        self.temp_c = c
 
     def set_lives(self, n):
         self.lives = n
@@ -308,13 +326,19 @@ class HudLink(Link):
         self.over, self.lives, self.samples, self._sent = False, C.LIVES, 0, None
         return self.send("R")
 
-    def virtual_temp(self, c):
-        return self.send(P.encode("V", "%.1f" % c))
-
     def handle(self, msg):
-        if msg[0] == "W":
-            self.last_w = now()
-            self.bus.post("hud_temp", msg[1], msg[2], msg[3])
+        if msg[0] == "J":
+            x = max(-100, min(100, msg[1])) / 100.0 * (-1.0 if C.JOY_INVERT_X else 1.0)
+            y = max(-100, min(100, msg[2])) / 100.0 * (-1.0 if C.JOY_INVERT_Y else 1.0)
+            sw = bool(msg[3])
+            st = self.state
+            pressed = sw and not st.joy_sw
+            st.joy, st.joy_t, st.joy_sw = (y, x), now(), sw           # (speed, turn)
+            if pressed:
+                self.bus.post("joy_button")
+
+    def on_lost(self):
+        self.state.joy, self.state.joy_sw = (0.0, 0.0), False
 
     def resync(self):
         if self.over:
@@ -323,7 +347,7 @@ class HudLink(Link):
             self.send("R")
             self.send(P.encode("H", self.lives))
             self.send(P.encode("E", self.samples))
-        self._zone_sent, self._sent = None, None
+        self._zone_sent, self._sent, self._t_temp = None, None, 0.0
 
 
 def link_thread(links, stop, state):

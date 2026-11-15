@@ -66,18 +66,22 @@ def make_game(tower=None, hud=None, **kw):
 
 
 # ---------------------------------------------------------------- protocol
-def test_protocol_pickup_and_warning_use_the_same_letters_as_ping_and_weather():
+def test_protocol_letters_with_two_meanings_are_told_apart_by_field_count():
     assert P.decode("P") == ("PICKUP",) and P.decode("P,5,100") == ("P", 5, 100)
-    assert P.decode("W,3") == ("WARN", 3.0) and P.decode("W,24.5,40,1") == ("W", 24.5, 40, 1)
-    assert P.decode("C,-45") == ("C", -45) and P.decode("M,80,65,70,40") == ("M", 80, 65, 70, 40)
-    assert P.decode("F") == ("F",) and P.decode("K") == ("K",) and P.decode("garbage,,") is None
-    assert P.encode("D", 170, -170, 0) == "D,170,-170,0"
+    assert P.decode("W,3") == ("WARN", 3.0)
+    assert P.decode("K,1") == ("K", 1) and P.decode("K,0") == ("K", 0) and P.decode("K") == ("K", -1)
+    assert P.decode("J,-40,100,1") == ("J", -40, 100, 1) and P.decode("J") == ("JIGGLE",)
+    assert P.decode("Z,2") == ("Z", 2) and P.decode("Z") == ("UP",)
+    assert P.decode("R") == ("R",) and P.decode("R,57") == ("RANGE", 57.0)
+    assert P.decode("C,-45") == ("C", -45) and P.decode("M,80,65,70,40") == ("M", 80, 65, 70, 40) and P.decode("V,118") == ("V", 118.0)
+    assert P.decode("F") == ("F",) and P.decode("garbage,,") is None
+    assert P.encode("D", 200, -200, 0) == "D,200,-200,0"
 
 
 # ---------------------------------------------------------------- movement model
 def test_mixer_scales_to_max_pwm_and_a_d_turn_the_right_way():
     s, t, l, r = mix(1.0, 0.0)
-    assert l == r == C.MAX_PWM == 170
+    assert l == r == C.MAX_PWM == 200
     _, _, l, r = mix(0.0, 1.0)                       # D = turn right: left wheel faster
     assert l > 0 > r
     _, _, l, r = mix(0.0, -1.0)                      # A = turn left
@@ -102,6 +106,101 @@ def test_pose_uses_the_same_speed_and_turn_as_the_rover():
     p = start_pose()
     step_pose(p, 1.0, 0.0, 1.0)
     assert math.isclose(math.hypot(p.x, p.y), C.V_MAX * C.METERS_PER_CM, rel_tol=1e-6)
+
+
+def test_the_input_pushed_furthest_wins_and_inputs_are_never_added():
+    from core.clock import now
+    from devio.gamepad import InputThread
+    st = SharedState()
+    st.drive_enabled = True
+    it = InputThread(st, Rec(), lambda m: None)
+    st.keys = (1.0, 0.0)                                   # W on the keyboard, nothing else
+    assert it.compute()[0] == 1.0
+    st.keys, st.joy, st.joy_t = (0.0, 0.0), (0.6, 0.0), now()   # the HUD panel joystick alone
+    sp = it.compute()[0]
+    assert 0.3 < sp < 0.7
+    st.keys = (1.0, 0.0)                                   # both: the keyboard is pushed further, and it is not 1.6
+    assert it.compute()[0] == 1.0
+    st.keys, st.joy = (0.0, 1.0), (1.0, 0.0)               # equal magnitude: one of them, not the sum
+    c = it.compute()
+    assert (c[0], c[1]) in ((0.0, 1.0), (1.0, 0.0)) or abs(c[0]) + abs(c[1]) <= 1.01
+    st.keys, st.joy_t = (0.0, 0.0), now() - 5.0            # a stale joystick line counts as centred
+    assert it.compute()[:2] == (0.0, 0.0)
+
+
+def test_standard_pad_layout_drives_pans_and_maps_buttons_like_an_xbox_controller():
+    from core.clock import now
+    from devio import pad as padmod
+    from devio.gamepad import InputThread
+
+    class FakeCtrl:                                       # what SDL reports for an Xbox pad: sticks and triggers as 16 bit numbers
+        name = "Xbox Wireless Controller"
+        vals = {}
+
+        def get_axis(self, a):
+            return self.vals.get(a, 0)
+
+    c = FakeCtrl()
+    p = padmod.ControllerPad(c)
+    assert p.standard and p.get_numaxes() == 6 and p.get_axis(4) == -1.0 and p.get_axis(5) == -1.0   # triggers released
+    c.vals = {pygame.CONTROLLER_AXIS_LEFTY: -32767, pygame.CONTROLLER_AXIS_LEFTX: 16384, pygame.CONTROLLER_AXIS_RIGHTX: 32767,
+              pygame.CONTROLLER_AXIS_TRIGGERRIGHT: 32767}
+    assert p.get_axis(1) == -1.0 and abs(p.get_axis(0) - 0.5) < 0.01 and p.get_axis(2) == 1.0 and p.get_axis(5) == 1.0
+    st = SharedState()
+    st.drive_enabled, st.pad = True, p
+    speed, turn, left, right = InputThread(st, Rec(), lambda m: None).compute()
+    assert speed > 0.5 and turn > 0 and left > right                 # stick up = forward, right = turn right (left wheel faster)
+    assert st.raw_axes[p.pan_axis] == 1.0                            # the right stick is the camera pan on every OS
+
+    def ev(kind, button):
+        return pygame.event.Event(kind, button=button)
+    got = lambda kind, b: padmod.button_number(p, ev(kind, b))
+    D, U = pygame.CONTROLLERBUTTONDOWN, pygame.CONTROLLERBUTTONUP
+    assert got(D, pygame.CONTROLLER_BUTTON_A) == ("down", C.BTN_CONFIRM) and got(D, pygame.CONTROLLER_BUTTON_B) == ("down", C.BTN_CAMERA)
+    assert got(D, pygame.CONTROLLER_BUTTON_Y) == ("down", C.BTN_AUTOPILOT) and got(U, pygame.CONTROLLER_BUTTON_START) == ("up", C.BTN_RESTART)
+    assert got(D, pygame.CONTROLLER_BUTTON_BACK) == ("down", C.BTN_BACK)
+    assert [got(D, b)[1] for b in (pygame.CONTROLLER_BUTTON_A, pygame.CONTROLLER_BUTTON_X, pygame.CONTROLLER_BUTTON_LEFTSHOULDER,
+                                   pygame.CONTROLLER_BUTTON_RIGHTSTICK)] == C.BTN_ACTIONS      # A X LB RS-click = actions 1 to 4
+    assert got(D, pygame.CONTROLLER_BUTTON_RIGHTSHOULDER) == ("down", C.BTN_FIRE)              # RB = the test shot
+    assert got(D, pygame.CONTROLLER_BUTTON_DPAD_LEFT) == ("dpad", "left")
+    assert padmod.button_number(p, ev(pygame.JOYBUTTONDOWN, 0)) is None  # the joystick twin of a controller event is ignored
+    raw = object.__new__(padmod.RawPad)
+    raw.standard = False
+    assert padmod.button_number(raw, ev(pygame.JOYBUTTONDOWN, 3)) == ("down", 3)   # an unknown pad keeps the raw numbers
+
+
+def test_rb_is_the_test_shot_like_the_x_key_and_the_actions_moved_off_it():
+    from app import App
+    app = object.__new__(App)
+    app.sm = S.StateMachine()
+    for state in (S.PLAY, S.PRACTICE, S.MENU, S.CALIBRATE):
+        app.sm.state = state
+        assert app._button(C.BTN_FIRE) == "fire"                        # RB fires the test shot
+    for state in (S.HWCHECK, S.GAMEOVER, S.RESULTS):
+        app.sm.state = state
+        assert app._button(C.BTN_FIRE) is None
+    app.sm.state = S.PLAY
+    assert app._button(C.BTN_ACTIONS[3]) == "act4"                      # right-stick click took over rest crew
+
+
+def test_joystick_lines_reach_the_mixer_with_invert_flags_and_the_button_is_the_test_shot():
+    from devio.links import HudLink
+    st, bus = SharedState(), Bus()
+    link = HudLink(st, bus, lambda m: None)
+    link.handle(("J", 50, 100, 0))
+    assert st.joy == (1.0, 0.5)                            # (speed, turn): y is forward, x is right
+    C.JOY_INVERT_X = C.JOY_INVERT_Y = True
+    try:
+        link.handle(("J", 50, 100, 0))
+        assert st.joy == (-1.0, -0.5)
+    finally:
+        C.JOY_INVERT_X = C.JOY_INVERT_Y = False
+    link.handle(("J", 0, 0, 1))
+    link.handle(("J", 0, 0, 1))                            # held: one press, not two
+    assert [e.kind for e in bus.drain()] == ["joy_button"]
+    g, _ = make_game()
+    g.intro_on = False
+    assert g.fire_test_asteroid() and g.strike["date"] is None and g.strike["test"]
 
 
 # ---------------------------------------------------------------- samples
@@ -197,11 +296,11 @@ def test_strike_takes_25_shield_then_a_heart_and_a_meter_when_shield_is_empty():
     g.intro_on = False
     g.m["shield"] = 60.0
     g._resolve_strike()
-    assert g.m["shield"] == 35 and g.hearts == 15
+    assert g.m["shield"] == 35 and g.hearts == C.LIVES
     g.m["shield"] = 0.0
     before = dict(g.m)
     g._resolve_strike()
-    assert g.hearts == 14 and sum(before.values()) - sum(g.m.values()) >= 1
+    assert g.hearts == C.LIVES - 1 and sum(before.values()) - sum(g.m.values()) >= 1
 
 
 def test_oxygen_and_food_drain_and_solar_recharge_only_in_daylight():
@@ -223,48 +322,90 @@ def test_oxygen_and_food_drain_and_solar_recharge_only_in_daylight():
 
 
 # ---------------------------------------------------------------- tower warning flow
-def test_tower_warning_then_k_resolves_the_strike_and_own_timer_without_tower():
+def test_without_the_tower_a_strike_hits_unless_the_rover_drove_faster_than_30_percent():
+    for speed, hit in ((0.0, True), (0.25, True), (0.8, False)):
+        g, st = make_game()
+        g.intro_on = False
+        g.next_storm_t = 1e9
+        g.m["shield"] = 60.0
+        g.next_strike_t = 0.0
+        st.cmd = (speed, 0.0, 0, 0)
+        for _ in range(int(C.STRIKE_WARN_S / 0.1) + 3):
+            g.step(0.1)
+        assert g.strike is None
+        assert (g.strikes, g.near_misses) == ((1, 0) if hit else (0, 1)), speed
+        assert g.m["shield"] == (35.0 if hit else 60.0)
+        assert g.score == (0 if hit else C.STRIKE_DODGE_SCORE)
+        assert g.next_strike_t > g.t                             # the next real impact flash is scheduled
+
+
+def test_tower_f_then_w3_then_k1_is_a_hit_and_k0_is_dodged():
+    for k, shield, dodged in ((1, 55.0, 0), (0, 80.0, 1)):
+        tower = Rec(connected=True)
+        g, st = make_game(tower=tower)
+        g.intro_on = False
+        g.next_storm_t = 1e9
+        g.m["shield"] = 80.0
+        g.next_strike_t = 0.0
+        g.step(0.05)
+        assert ("fire",) in tower.sent and g.strike["phase"] == "await"      # F sent at the scheduled time
+        assert not any(e[0] == "asteroid_warn" for e in g.fx)                # no banner until the beam is down
+        g.step(2.0)                                                          # the tower is still swinging the beam
+        assert g.strike["phase"] == "await"
+        g.handle(Event("tower_warn", (3.0,)))
+        assert g.strike["phase"] == "warn" and g.strike["left"] == 3.0 and any(e[0] == "asteroid_warn" for e in g.fx)
+        g.handle(Event("tower_k", (k,)))
+        assert g.strike is None and g.m["shield"] == shield and g.near_misses == dodged
+        assert g.next_strike_t > g.t
+
+
+def test_no_w_within_8_seconds_of_f_runs_the_warning_on_the_games_own_timer():
     tower = Rec(connected=True)
     g, st = make_game(tower=tower)
     g.intro_on = False
-    g.m["shield"] = 80.0
+    g.next_storm_t = 1e9
     g.next_strike_t = 0.0
     g.step(0.05)
-    assert ("fire",) in tower.sent and g.strike and g.strike["phase"] == "await"
-    g.handle(Event("tower_warn", (3.0,)))
-    assert g.strike["phase"] == "warn" and any(e[0] == "asteroid_warn" for e in g.fx)
-    g.handle(Event("tower_k", ()))
-    assert g.strike is None and g.m["shield"] == 55
-    g2, _ = make_game()                                        # no tower at all: same warning from our own timer
-    g2.intro_on = False
-    g2.m["shield"] = 80.0
-    g2.next_strike_t = 0.0
-    g2.step(0.05)
-    assert g2.strike["phase"] == "warn" and g2.strike["mode"] == "own"
-    for _ in range(40):
-        g2.step(0.1)
-    assert g2.m["shield"] <= 55 and g2.strikes == 1
+    for _ in range(79):
+        g.step(0.1)
+    assert g.strike["phase"] == "await"
+    g.step(0.2)
+    assert g.strike["phase"] == "warn" and g.strike["mode"] == "own"
+    for _ in range(32):
+        g.step(0.1)
+    assert g.strike is None and g.strikes == 1
 
 
-def test_test_fire_button_shows_the_warning_without_a_date():
+def test_tower_test_button_shows_the_warning_without_a_date_and_keeps_the_schedule():
     g, _ = make_game()
     g.intro_on = False
+    nxt = g.next_strike_t
     g.handle(Event("tower_warn", (3.0,)))
     assert g.strike["phase"] == "warn" and g.strike["date"] is None
+    g.handle(Event("tower_k", (0,)))
+    assert g.strike is None and g.near_misses == 1 and g.next_strike_t == nxt
+
+
+def test_scheduled_warnings_carry_the_real_impact_date():
+    g, _ = make_game()
+    g.intro_on = False
+    g.next_strike_t = 0.0
+    g.step(0.05)
+    assert g.nasa.impacts.ok and re.match(r"\d{4}-\d\d-\d\d$", g.strike["date"])
 
 
 # ---------------------------------------------------------------- thermal and NASA data
-def test_diviner_range_comes_from_the_table_and_the_sensor_maps_onto_it():
+def test_diviner_day_maximum_and_night_minimum_come_from_the_table():
     from core.nasa import Diviner
     d = Diviner()
     assert d.ok and d.t_max > 100 and d.t_min < -100                       # read from data/nasa, not hard-coded
-    assert math.isclose(d.from_sensor(C.SENSOR_COLD_C), d.t_min) and math.isclose(d.from_sensor(C.SENSOR_HOT_C), d.t_max)
-    mid = d.from_sensor((C.SENSOR_COLD_C + C.SENSOR_HOT_C) / 2)
-    assert math.isclose(mid, (d.t_min + d.t_max) / 2)
+    assert d.t_max == max(t for _, t in d.table) and d.t_min == min(t for _, t in d.table)
+    assert abs(d.at(12.0) - d.t_max) < 15 and d.at(3.0) < -100
 
 
-def test_no_hud_panel_means_a_simulated_temperature_that_keeps_changing_and_is_labelled():
-    g, st = make_game()
+def test_the_temperature_is_always_the_diviner_replay_and_goes_to_the_hud_panel():
+    hud = Rec(connected=True)
+    g, st = make_game(hud=hud)
     g.intro_on = False
     temps = set()
     for _ in range(300):
@@ -272,26 +413,26 @@ def test_no_hud_panel_means_a_simulated_temperature_that_keeps_changing_and_is_l
         temps.add(round(g.thermal.lunar_c))
         if g.over:
             break
-    assert g.thermal.source == "SIM" and "SIM (NASA Diviner)" in g.thermal.label() and len(temps) > 10
+    assert len(temps) > 10                                                 # it keeps changing with no hardware at all
+    assert g.thermal.label().startswith("Lunar surface ") and g.thermal.source() == "Source: NASA Diviner (replay)"
+    sent = [m for m in hud.sent if m[0] == "set_temp"]
+    assert sent and sent[-1][1] == g.thermal.lunar_c
+    assert not hasattr(g.thermal, "on_reading")                            # nothing can feed it a reading
 
 
-def test_valid_sensor_readings_win_and_dead_sensor_is_fed_the_simulation():
-    hud = Rec(connected=True)
-    g, st = make_game(hud=hud)
-    g.intro_on = False
-    g.next_storm_t = g.next_strike_t = 1e9
-    g.thermal.on_reading(34.0, 40, 0.0)
-    g.step(0.1, wall=1.0)
-    assert g.thermal.source == "SENSOR" and "Sensor 34 C" in g.thermal.label()
-    g.step(0.1, wall=20.0)                                              # 19 s with no valid reading
-    assert g.thermal.source == "SIM"
-    assert any(m[0] == "virtual_temp" for m in hud.sent)
-    g.thermal.on_reading(30.0, -1, 21.0)                                # hum -1: the board repeating our V is not a reading
-    g.step(0.1, wall=21.5)
-    assert g.thermal.source == "SIM"
-    g.thermal.on_reading(30.0, 40, 22.0)
-    g.step(0.1, wall=22.5)
-    assert g.thermal.source == "SENSOR"
+def test_hud_link_sends_v_once_a_second_only_while_connected():
+    from devio.links import HudLink
+    sent = []
+    link = HudLink(SharedState(), Bus(), lambda m: None)
+    link.send = lambda line: sent.append(line) or True
+    link.set_temp(117.6)
+    link.connected = False
+    link.tick()
+    assert not [l for l in sent if l.startswith("V,")]
+    link.best = lambda: object.__new__(type("T", (), {"name": "x", "rtt_ms": 1.0, "fw": 2, "loss": lambda self: 0.0}))
+    link.tick()
+    link.tick()
+    assert [l for l in sent if l.startswith("V,")] == ["V,118"]            # one line, not one per tick
 
 
 def test_storms_come_from_nasa_events_or_the_timer_and_drain_shield():
@@ -327,7 +468,8 @@ def test_intro_holds_the_rover_and_the_meters_until_it_ends_and_skips():
     for _ in range(40):
         g.step(0.1)
     assert g.intro_on and g.m == m and g.t == 0.0
-    g.step(2.5)                                                  # the intro is 6 s long (INTRO_S)
+    g.step(2.5)                                                  # the intro is 5 s long (INTRO_S)
+    assert C.INTRO_S == 5.0
     assert not g.intro_on and not st.hold_commands
     g.reset(intro=True)
     g.skip_intro()
@@ -362,13 +504,29 @@ def test_devices_connect_report_lost_and_the_tower_warns_before_it_fires():
         sh = net.sim_hud
         assert wait(lambda: sh.pickups == 1 and sh.meters == (80, 65, 70, 40) and sh.lives == 12 and sh.samples == 3, 3.0)
         assert sh.lcd() == ("PWR 80  O2 65 ", "FOOD 70  SHLD 40 ")
-        # tower: F -> W then K
-        tower.allow(True)
-        assert tower.fire()
+        hud.set_temp(118.0)                                               # V,tempC once a second
+        assert wait(lambda: sh.temp_c == 118.0, 3.0)
+        # joystick: J,x,y,sw reaches the shared state, the button posts one test shot
+        sh.set_stick(50, 100, 0)
+        assert wait(lambda: net.state.joy == (1.0, 0.5), 2.0)
+        net.drain()
+        sh.set_stick(0, 0, 1)
         evs = []
-        assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "tower_k" for e in evs), 5.0)
-        kinds = [e.kind for e in evs if e.kind in ("tower_warn", "tower_k")]
-        assert kinds == ["tower_warn", "tower_k"]
+        assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "joy_button" for e in evs), 2.0)
+        assert sum(e.kind == "joy_button" for e in evs) == 1
+        sh.set_stick(0, 0, 0)
+        # tower: F -> W,3 then K,1 (rover still in the spot), then K,0 (it left)
+        tower.allow(True)
+        for in_spot in (True, False):
+            net.sim_tower.rover_in_spot = in_spot
+            assert wait(lambda: tower.fire(), 4.0)
+            evs = []
+            assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "tower_k" for e in evs), 5.0)
+            got = [(e.kind, e.data[0]) for e in evs if e.kind in ("tower_warn", "tower_k")]
+            assert got == [("tower_warn", 0.0), ("tower_k", 1 if in_spot else 0)], got
+        tower.ask_range()
+        assert wait(lambda: tower.last_range == 60.0, 2.0)
+        assert tower.connected                                            # pings were answered all the way through
         # pulling the cable: the HUD panel is lost within 2 s
         net.scanner.active["SIM-HUD"][0].port.close()
         t0 = time.time()
@@ -502,34 +660,57 @@ def test_no_delay_calls_in_any_sketch():
         assert not re.search(r"\bdelay\s*\(", code), p
 
 
-def test_rover_sketch_is_drv8833_only_with_no_tb6612_or_hcsr04():
+def test_rover_sketch_is_one_drv8833_with_a_slew_limit_and_no_tb6612_or_hcsr04():
     s = read("firmware", "robot", "robot.ino")
     code = re.sub(r"//.*", "", s)
     assert "L_IN1 = 5, L_IN2 = 6, R_IN1 = 9, R_IN2 = 10" in s and "AccelStepper pan(AccelStepper::HALF4WIRE, 4, 8, 7, 12)" in s
     for bad in ("TB6612", "PWMA", "AIN1", "BIN1", "STBY", "TRIG", "ECHO", "pulseIn", "STOP_CM", "S,"):
         assert bad not in code, bad
     assert "void stopAll()" in code and "CMD_TIMEOUT = 300" in code and "PAN_LIMIT = 90" in code
+    assert "SLEW = 40" in code and "SLEW_MS = 20" in code and "ONE dual DRV8833" in s and C.MAX_PWM == 200
     assert not re.search(r"pinMode\s*\(\s*(L_IN|R_IN)", code)
 
 
 def test_hud_sketch_matches_the_pin_table():
     s = read("firmware", "hud_panel", "hud_panel.ino")
-    assert "PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, YELLOW = A0, BUZZER = 7" in s
+    code = re.sub(r"//.*", "", s)
+    assert "GREEN = 3, BLUE = 4, RED = 5, YELLOW = A0, BUZZER = 7" in s and "JOY_X = A1, JOY_Y = A2, JOY_SW = 6" in s
     assert "LiquidCrystal lcd(8, 9, 10, 11, 12, 13)" in s and "0x3C" in s and "tone(BUZZER, want)" in s
-    for f in ("1200", "2000", "400", "I,hud,2"):
-        assert f in s
-    assert "D6" not in re.sub(r"//.*", "", s) and "PN2222" not in s and "5 blinks" in s
+    for f in ("1200", "2000", "400", "I,hud,2", 'Serial.print("J,")', "now - tJoy >= 33", "pinMode(JOY_SW, INPUT_PULLUP)"):
+        assert f in s, f
+    assert "PN2222" not in s and "5 blinks" in s and "Serial.print(\"W,\")" not in code
 
 
-def test_tower_sketch_warns_then_fires_then_k_and_the_button_runs_the_same_sequence():
+def test_tower_sketch_is_the_uno_r3_laser_tower_and_speaks_the_suites_line_protocol():
     s = read("firmware", "tower", "tower.ino")
-    assert 'Serial.println("W,3")' in s and 'Serial.println("K")' in s and "startShot(now); }" in s
+    code = re.sub(r"//.*", "", s)
+    assert "AccelStepper tilt(AccelStepper::HALF4WIRE, 4, 6, 5, 7)" in s
+    assert "BTN_PIN = 2, SERVO_PIN = 9, TRIG = 11, ECHO = 12, LASER = 13" in s and "digitalWrite(LASER, HIGH)" in s
+    assert code.count("digitalWrite(LASER") == 1                               # on from power-up, never switched again
+    for line in ('F("I,tower,2")', 'F("W,3")', 'F("K,1")', 'F("K,0")', 'F("R,")', '"F")', '"J")', '"Z")', '"R")'):
+        assert line in code, line
+    assert "tilt.setCurrentPosition(TILT_DIR * UP_STEPS)" in code and code.count("tiltTo(UP_STEPS)") >= 2
+    assert "service()" in code and "LED" not in code.replace("LASER", "")      # pings answered mid-sequence, no armed LED
+    assert "if (digitalRead(BTN_PIN) == LOW" in code and "fireSequence();" in code
 
 
 def test_robot_bridge_selftest():
     p = os.path.join(ROOT, "firmware", "robot", "linux_bridge", "robot_bridge.py")
     r = subprocess.run([sys.executable, p, "--selftest"], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0 and "selftest OK" in r.stdout, r.stdout + r.stderr
+
+
+def test_no_temperature_part_code_or_wording_is_left():
+    bad = re.compile("DH" + "T|dh" + "t11|dht\\.|SENSOR_(COLD|HOT)_C|from_sensor|virtual_temp")
+    hits = []
+    for top in ("laptop", "firmware", "tools", "docs", "tests"):
+        for folder, _, files in os.walk(os.path.join(ROOT, top)):
+            for f in files:
+                if f.endswith((".py", ".ino", ".md", ".json")) and "__pycache__" not in folder and f != "test_outpost.py":
+                    text = open(os.path.join(folder, f), encoding="utf-8", errors="ignore").read()
+                    if bad.search(text):
+                        hits.append(os.path.relpath(os.path.join(folder, f), ROOT))
+    assert not bad.search(read("README.md")) and not hits, hits
 
 
 def test_no_orbit_earth_or_spacecraft_wording_in_the_game_ui():

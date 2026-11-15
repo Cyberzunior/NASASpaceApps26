@@ -44,19 +44,29 @@ def hints(surf, text, y=None):
 class MenuList:
     def __init__(self, items):
         self.items, self.i = items, 0
+        self.pos = 0.0                       # where the highlight is drawn: glides to the selected row
+        self.tick = 0
 
     def move(self, d):
         self.i = (self.i + d) % len(self.items)
 
     def draw(self, surf, x, y, step=66, size=38, width=520):
+        now_ms = pygame.time.get_ticks()
+        dt = min(0.1, max(0.0, (now_ms - self.tick) / 1000.0))
+        self.tick = now_ms
+        self.pos += (self.i - self.pos) * min(1.0, dt * 18.0)
+        if abs(self.i - self.pos) < 0.004:
+            self.pos = float(self.i)
+        hl = pygame.Rect(x, int(y + self.pos * step), width, step - 10)
+        select_row(surf, hl)
+        nudge = 3 * math.sin(now_ms / 160.0)                                  # the pointer breathes
+        pygame.draw.polygon(surf, K.CYAN, [(hl.left + 20 + nudge, hl.centery - 9), (hl.left + 20 + nudge, hl.centery + 9), (hl.left + 33 + nudge, hl.centery)])
         for k, (label, hint) in enumerate(self.items):
             sel = k == self.i
             r = pygame.Rect(x, y + k * step, width, step - 10)
-            if sel:
-                select_row(surf, r)
-                pygame.draw.polygon(surf, K.CYAN, [(r.left + 20, r.centery - 9), (r.left + 20, r.centery + 9), (r.left + 33, r.centery)])
-            fonts.text(surf, label, (r.left + 50, r.centery), size, K.WHITE if sel else K.GREY, bold=sel, anchor="midleft", track=1)
-            if sel and hint:
+            near = max(0.0, 1.0 - abs(k - self.pos))                          # text brightens as the highlight arrives
+            fonts.text(surf, label, (r.left + 50, r.centery), size, K.mix(K.GREY, K.WHITE, near), bold=sel, anchor="midleft", track=1)
+            if sel and hint and near > 0.9:
                 fonts.text(surf, hint, (r.right - 20, r.centery), 18, K.mix(K.CYAN, K.WHITE, 0.5), anchor="midright")
 
 
@@ -127,7 +137,7 @@ class MenuScreen:
         r = panel(surf, pygame.Rect(C.RENDER_W // 2 - 400, 490, 800, 344), 200, scan=False)
         self.list.draw(surf, r.left + 20, r.top + 20, 62, 34, r.w - 40)
         pill(surf, pygame.Rect(C.RENDER_W - 250, C.RENDER_H - 126, 210, 36), "BEST  %s" % mmss(C.BEST_TIME), K.YELLOW, 18)
-        hints(surf, "up / down: choose    A or Enter: select    Tab: connections    F2 / Back: hardware check    F11: fullscreen    M: mute")
+        hints(surf, "up / down: choose    A or Enter: select    Tab: connections    X / RB or joystick button: Test shot    F2 / Back: hardware check    M: mute")
 
 
 class SettingsScreen:
@@ -356,14 +366,14 @@ class HwCheckScreen:
         ("pan", "Camera pans left and right", "manual"),
         ("camera", "Camera picture is live", "auto"),
         ("tower_link", "Tower connected", "auto"),
-        ("tower_fire", "Tower warned, fired and answered K", "auto"),
-        ("hud_link", "HUD panel connected, temperature readings arriving", "auto"),
+        ("tower_fire", "Tower: beam down (W,3), then K,1 or K,0", "auto"),
+        ("hud_link", "HUD panel connected, joystick lines arriving", "auto"),
         ("leds", "HUD LEDs: yellow blinks on pickup, red hot, blue cold", "manual"),
         ("buzzer", "HUD buzzer: fast high beeps hot, low beeps cold", "manual"),
         ("lcd", "HUD LCD and OLED show the numbers", "manual"),
     ]
-    TESTS = {"1": "Spin LEFT wheel", "2": "Spin RIGHT wheel", "3": "Pan the camera", "4": "Fire tower once",
-             "5": "Pickup blink + chirp", "6": "Hot warning", "7": "Cold warning"}
+    TESTS = {"1": "Spin LEFT wheel", "2": "Spin RIGHT wheel", "3": "Pan the camera", "4": "Tower test shot (F)",
+             "5": "Pickup blink + chirp", "6": "Hot warning", "7": "Cold warning", "8": "Tower distance (R)"}
 
     def __init__(self):
         self.status = {k: None for k, _, _ in self.CHECKS}          # None pending, True pass, False fail
@@ -414,9 +424,14 @@ class HwCheckScreen:
             t.allow(True)
             if t.fire(test=True):
                 self.fire_t = now()
-                app.toast("Fired: warning first, then one ball", "warn")
+                app.toast("Test shot: the beam swings down, then W,3 and K", "warn")
             else:
-                app.toast("Tower disarmed or fired within 2 s", "warn")
+                app.toast("Tower stopped or fired within 2 s", "warn")
+        elif key == "8":
+            if not t.connected:
+                app.toast("Tower not connected", "bad")
+                return
+            t.ask_range()
         elif key == "5":
             if not h.connected:
                 app.toast("HUD panel not connected", "bad")
@@ -445,7 +460,7 @@ class HwCheckScreen:
             st["tower_link"] = True
         if self.fire_t > 0 and app.links["tower"].last_k > self.fire_t:
             st["tower_fire"] = True
-        if snap["hud"][0] and app.links["hud"].last_w is not None:
+        if snap["hud"][0] and now() - app.state.joy_t < 1.0:
             st["hud_link"] = True
         if app.camera is not None and app.camera.live():
             st["camera"] = True
@@ -479,7 +494,7 @@ class HwCheckScreen:
         title(surf, "HARDWARE CHECK", 90)
         snap = app.state.snapshot()
         y = 150
-        for key, label in (("pad", "Gamepad"), ("robot", "Rover (UNO Q, Wi-Fi)"), ("tower", "Tower (UNO Q, USB)"),
+        for key, label in (("pad", "Gamepad"), ("robot", "Rover (UNO Q, Wi-Fi)"), ("tower", "Tower (UNO R3, USB)"),
                            ("hud", "HUD panel (UNO Q, USB)"), ("camera", "Camera")):
             conn, col, where, fw, rtt, loss, note, sim = snap[key]
             r = panel(surf, pygame.Rect(120, y, 1120, 66), 170, scan=False)
@@ -520,49 +535,73 @@ class HwCheckScreen:
         badge = pygame.Rect(C.RENDER_W // 2 - 260, C.RENDER_H - 190, 520, 76)
         pill(surf, badge, "READY FOR DEMO" if ready else "%d of %d checks passed" % (sum(1 for v in self.status.values() if v), len(self.status)),
              K.GREEN if ready else K.GREY, 34 if ready else 26)
-        hints(surf, "1-7: run a test    Y / N: confirm what you saw    Esc / B: back")
+        hints(surf, "1-8: run a test    Y / N: confirm what you saw    Esc / B: back")
 
 
 class ResultsScreen:
-    """The debrief: time survived, samples by type, strikes, the meter that failed first, why it matters, the NASA data used."""
+    """The debrief: time survived, samples by type, strikes, the meter that failed first, why it matters, the NASA data used.
+    The tiles arrive one after another and the numbers count up."""
+
+    def __init__(self):
+        self.t = 0.0
+        self.res = None
 
     def handle(self, app, a):
         if a in ("start", "confirm"):
             app.after_results()
 
     def update(self, app, dt):
-        pass
+        if app.last_results is not self.res:                            # a new debrief: start the animation again
+            self.res, self.t = app.last_results, 0.0
+        self.t += dt
 
     def draw(self, surf, app):
         res = app.last_results
         cx = C.RENDER_W // 2
-        if app.world_view is not None:                                 # the night sky behind the debrief
-            app.world_view.stars.draw(surf)
+        sky = app.intro.stars if getattr(app, "intro", None) is not None else None
+        if sky is not None:                                             # the night sky behind the debrief
+            sky.draw(surf)
             dim(surf, 120)
         else:
             surf.fill(K.BG)
         title(surf, "OUTPOST LOST", 104, 96, K.RED)
         s = res["samples"]
-        tiles = (("TIME SURVIVED", mmss(res["time"]), K.WHITE), ("SAMPLES", str(s["ice"] + s["regolith"] + s["mineral"]), K.CYAN),
-                 ("SCORE", str(res["score"]), K.YELLOW), ("ASTEROID HITS", str(res["strikes"]), K.ORANGE),
-                 ("FAILED FIRST", res["first_fail_label"].upper(), K.RED))
+        total = s["ice"] + s["regolith"] + s["mineral"]
+        tiles = (("TIME SURVIVED", res["time"], mmss, K.WHITE), ("SAMPLES", total, None, K.CYAN),
+                 ("SCORE", res["score"], None, K.YELLOW), ("ASTEROID HITS", res["strikes"], None, K.ORANGE),
+                 ("FAILED FIRST", res["first_fail_label"].upper(), None, K.RED))
         tw, gap = 300, 20
         x0 = cx - (len(tiles) * tw + (len(tiles) - 1) * gap) // 2
-        for i, (k, v, col) in enumerate(tiles):                        # one stat tile each
-            r = panel(surf, pygame.Rect(x0 + i * (tw + gap), 210, tw, 150), 205, edge=col if i == 4 else K.PANEL_EDGE, scan=False)
+        for i, (k, val, fmt, col) in enumerate(tiles):                  # one stat tile each
+            a = (self.t - 0.15 - i * 0.14) / 0.45
+            if a <= 0:
+                continue
+            e = 1.0 - (1.0 - min(1.0, a)) ** 3
+            r = panel(surf, pygame.Rect(x0 + i * (tw + gap), 210 + int((1.0 - e) * 60), tw, 150), 205, edge=col if i == 4 else K.PANEL_EDGE, scan=False)
+            if not isinstance(val, str):                                # numbers count up
+                c = 1.0 - (1.0 - min(1.0, max(0.0, a - 0.3) / 1.8)) ** 3
+                val = (fmt or (lambda v: str(int(round(v)))))(val * c)
             fonts.text(surf, k, (r.centerx, r.top + 30), 15, K.GREY, bold=True, anchor="center", track=2)
-            fonts.text(surf, v, (r.centerx, r.top + 90), 50 if len(v) < 8 else 38, col, bold=True, anchor="center", display=True, track=2)
-        fonts.text(surf, "ice %d      regolith %d      mineral %d" % (s["ice"], s["regolith"], s["mineral"]), (cx, 392), 20, K.GREY, anchor="center")
-        r = panel(surf, pygame.Rect(cx - 760, 440, 1520, 150), 205, edge=K.YELLOW, scan=False)
-        caption(surf, "WHY IT MATTERS", (r.left + 24, r.top + 18), K.YELLOW)
-        CalibrateScreen.wrap(surf, res["why"], cx, r.top + 54, 1400, 26, K.mix(K.YELLOW, K.WHITE, 0.4))
-        lines = res["nasa"] or ["none (no data files found in data/nasa)"]
-        r = panel(surf, pygame.Rect(cx - 760, 612, 1520, 64 + 32 * len(lines)), 205, scan=False)
-        caption(surf, "NASA DATA USED THIS RUN", (r.left + 24, r.top + 18))
-        for i, line in enumerate(lines):
-            fonts.text(surf, line, (cx, r.top + 62 + i * 32), 21, K.mix(K.CYAN, K.WHITE, 0.25), anchor="center")
-        a = 150 + int(105 * (0.5 + 0.5 * math.sin(now() * 4)))        # soft pulse instead of a hard blink
-        fonts.text(surf, "PRESS START OR ENTER TO TRY AGAIN", (cx, C.RENDER_H - 120), 34, K.YELLOW, bold=True, anchor="center", alpha=a, display=True, track=4)
+            fonts.text(surf, val, (r.centerx, r.top + 90), 50 if len(val) < 8 else 38, col, bold=True, anchor="center", display=True, track=2)
+        if self.t > 1.0:
+            fonts.text(surf, "ice %d      regolith %d      mineral %d      dodged %d" % (s["ice"], s["regolith"], s["mineral"], res.get("near_misses", 0)),
+                       (cx, 392), 20, K.GREY, anchor="center", alpha=int(255 * min(1.0, (self.t - 1.0) / 0.4)))
+        if self.t > 1.1:
+            e = 1.0 - (1.0 - min(1.0, (self.t - 1.1) / 0.45)) ** 3
+            r = panel(surf, pygame.Rect(cx - 760, 440 + int((1.0 - e) * 50), 1520, 150), 205, edge=K.YELLOW, scan=False)
+            caption(surf, "WHY IT MATTERS", (r.left + 24, r.top + 18), K.YELLOW)
+            CalibrateScreen.wrap(surf, res["why"], cx, r.top + 54, 1400, 26, K.mix(K.YELLOW, K.WHITE, 0.4))
+        if self.t > 1.35:
+            e = 1.0 - (1.0 - min(1.0, (self.t - 1.35) / 0.45)) ** 3
+            lines = res["nasa"] or ["none (no data files found in data/nasa)"]
+            r = panel(surf, pygame.Rect(cx - 760, 612 + int((1.0 - e) * 50), 1520, 64 + 32 * len(lines)), 205, scan=False)
+            caption(surf, "NASA DATA USED THIS RUN", (r.left + 24, r.top + 18))
+            for i, line in enumerate(lines):
+                fonts.text(surf, line, (cx, r.top + 62 + i * 32), 21, K.mix(K.CYAN, K.WHITE, 0.25), anchor="center")
+        if self.t > 2.0:
+            a = 150 + int(105 * (0.5 + 0.5 * math.sin(now() * 4)))    # soft pulse instead of a hard blink
+            fonts.text(surf, "PRESS START OR ENTER TO TRY AGAIN", (cx, C.RENDER_H - 120), 34, K.YELLOW, bold=True, anchor="center",
+                       alpha=int(a * min(1.0, (self.t - 2.0) / 0.4)), display=True, track=4)
 
 
 class GameOverFX:

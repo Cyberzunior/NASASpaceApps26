@@ -135,7 +135,7 @@ class WeatherTab(Tab):
             g.addWidget(hint(expect), i, 1)
         left.addWidget(cmds)
         left.addWidget(hint("Close the game first: only one program can open the UNO R3's COM port. "
-                            "There is no DHT11 any more: the board simulates 24 C +/- a swing that follows a 60 s orbit, "
+                            "This tab still targets the older panel sketch: it simulates 24 C +/- a swing on a 60 s cycle, "
                             "and the pot on A1 (or the game, from a NASA solar flare) sets the swing. "
                             "V overrides it until R. Above 30 C is HOT, below 18 C is COLD, 1 C hysteresis."))
 

@@ -42,11 +42,12 @@ class Starfield:
         self.bg = _nebula(self.w, self.h)
         self.shoot = None
         self.t = 0.0
+        self.drift = 1.0                 # 1 = the menu's slow sideways drift, 0 = fixed stars
 
     def update(self, dt):
         self.t += dt
         for layer in self.layers:
-            speed = layer[-3]
+            speed = layer[-3] * self.drift
             for s in layer[:-3]:
                 s[0] -= speed * dt
                 if s[0] < -4:
@@ -62,15 +63,20 @@ class Starfield:
             sp = random.uniform(900, 1400)
             self.shoot = [random.uniform(0, self.w * 0.7), random.uniform(0, self.h * 0.4), math.cos(a) * sp, math.sin(a) * sp, 0.6]
 
-    def draw(self, surf, off=(0, 0), shift=(0.0, 0.0)):
+    def draw(self, surf, off=(0, 0), shift=(0.0, 0.0), pan=None):
+        """pan (pixels): every star shifts by the same amount and wraps, the way a sky turns when the viewer turns."""
         surf.blit(self.bg, (0, 0))
+        w = self.w
         for layer in self.layers:
             speed, size, bright = layer[-3], layer[-2], layer[-1]
             par = speed / 16.0
             for s in layer[:-3]:
                 tw = 0.65 + 0.35 * math.sin(self.t * s[3] * 2 + s[2])
                 v = int(bright * tw)
-                x, y = int(s[0] + off[0] * par - shift[0] * par * 20), int(s[1] + off[1] * par - shift[1] * par * 20)
+                if pan is None:
+                    x, y = int(s[0] + off[0] * par - shift[0] * par * 20), int(s[1] + off[1] * par - shift[1] * par * 20)
+                else:
+                    x, y = int(s[0] + pan) % w, int(s[1])
                 surf.fill((v, v, min(255, v + 12)), (x, y, size, size))
         if self.shoot:
             x, y, vx, vy, life = self.shoot

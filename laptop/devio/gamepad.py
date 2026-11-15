@@ -1,12 +1,13 @@
 """Gamepad polling and the ONE mixer, in their own thread at INPUT_HZ (default 120).
 
-The thread reads the stick (or the keyboard fallback), applies the dead zone and expo curve, picks the stick or the
+The thread reads the gamepad, the keyboard and the HUD panel joystick (the one pushed furthest wins), applies the dead zone and expo curve, picks the stick or the
 auto-pilot, runs mix() once, and stores the result in the shared state. The game craft reads that same stored
 command, and this thread sends the same numbers to the robot as one small UDP line every 20 ms (and at once when
 they change). Nothing here waits for an acknowledgement.
 
 SDL only refreshes joystick values when events are pumped. The hint below makes SDL refresh them in its own
-thread, so reading axes here works while the main thread draws. Verify on your pad with tools/gamepad_test.py."""
+thread, so reading axes here works while the main thread draws. devio/pad.py gives every pad SDL knows (the Xbox wireless
+controller and most others) one standard layout; tools/gamepad_test.py shows what your pad reports."""
 import os
 import threading
 import time
@@ -31,10 +32,12 @@ def read_pad(pad):
     """Returns (speed, turn, scale, raw_axes). Speed is positive when the stick is pushed up."""
     n = pad.get_numaxes()
     raw = [pad.get_axis(i) for i in range(n)]
-    turn = raw[C.AXIS_TURN] if C.AXIS_TURN < n else 0.0
-    speed = -raw[C.AXIS_SPEED] if C.AXIS_SPEED < n else 0.0
-    brake = raw[C.AXIS_BRAKE] if 0 <= C.AXIS_BRAKE < n else -1.0
-    boost = raw[C.AXIS_BOOST] if 0 <= C.AXIS_BOOST < n else -1.0
+    ax = lambda name, default: getattr(pad, name, default)       # the pad knows its own axis numbers (standard layout or config.py)
+    a_turn, a_speed, a_brake, a_boost = ax("turn_axis", C.AXIS_TURN), ax("speed_axis", C.AXIS_SPEED), ax("brake_axis", C.AXIS_BRAKE), ax("boost_axis", C.AXIS_BOOST)
+    turn = raw[a_turn] if 0 <= a_turn < n else 0.0
+    speed = -raw[a_speed] if 0 <= a_speed < n else 0.0
+    brake = raw[a_brake] if 0 <= a_brake < n else -1.0
+    boost = raw[a_boost] if 0 <= a_boost < n else -1.0
     return shape_axis(speed), shape_axis(turn), trigger_scale(brake, boost), raw
 
 
@@ -61,9 +64,12 @@ class InputThread(threading.Thread):
                 speed, turn, scale, raw = read_pad(pad)
             except Exception:
                 self.errors += 1
-        if speed == 0.0 and turn == 0.0:                    # the keyboard fallback only when the pad is idle
-            speed, turn = st.keys
-            scale = 1.0
+        # keyboard, gamepad and the HUD panel joystick: the one pushed furthest wins, they are never added
+        best = max(abs(speed), abs(turn))
+        joy = st.joy if now() - st.joy_t < C.JOY_TIMEOUT_S else (0.0, 0.0)
+        for s2, t2 in (st.keys, (shape_axis(joy[0]), shape_axis(joy[1]))):
+            if max(abs(s2), abs(t2)) > best:
+                best, speed, turn, scale = max(abs(s2), abs(t2)), s2, t2, 1.0
         st.raw_axes = raw
         st.stick = (speed, turn)
         tc = st.test_cmd
@@ -75,7 +81,7 @@ class InputThread(threading.Thread):
             s, t = st.ap_cmd                                  # the auto-pilot already includes the stick nudge
         else:
             s, t = speed * scale, turn
-        return mix(s, t * st.turn_scale)                   # weather penalty here, so both bodies get it
+        return mix(s, t * st.turn_scale)                   # scaled here, so both bodies get it
 
     def run(self):
         period = 1.0 / C.INPUT_HZ

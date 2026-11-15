@@ -1,37 +1,41 @@
 // T-Minus_6 HUD panel, firmware v2. Arduino UNO Q, microcontroller side, 3.3 V logic. USB serial, 115200 baud.
-// Protocol: laptop/devio/protocol.py (the same lines the triage suite uses). No delay() anywhere.
+// Protocol: laptop/devio/protocol.py (the same lines the triage suite uses). No delay() anywhere: millis() timers only.
 //
 // Lines in : I?   P,seq,us (ping, answered Q,seq,us)   P (sample picked up)   BZ (chirp)   Z,state (0 normal 1 cold 2 hot)
-//            V,tempC (simulated temperature when the DHT11 is dead)   M,pwr,o2,food,shield   H,hearts   E,samples
+//            V,tempC (lunar surface temperature, once a second)   M,pwr,o2,food,shield   H,hearts   E,samples
 //            G (game over)   R (reset)   L,line1|line2 (text on the LCD; "L," clears it)
-// Lines out: I,hud,2   Q,seq,us   W,temp,hum,state  every 2 s while the DHT11 reads fine
-//            (when it does not and a V arrived in the last 4 s: W,<V value>,-1,state; hum -1 = "not a real reading")
+// Lines out: I,hud,2   Q,seq,us   J,x,y,sw every 33 ms (joystick: x right, y forward, -100..100, sw 1 while pressed)
 //
-// Pins: D2 DHT11 (3V3) | D3 green LED | D4 blue LED | D5 red LED | A0 yellow LED | D6 unused | D7 passive buzzer +
-//       D8 D9 LCD RS E | D10..D13 LCD D4..D7 | SDA SCL OLED SSD1306 0x3C (3V3)
-// Libraries: LiquidCrystal, DHT sensor library, Adafruit SSD1306, Adafruit GFX.
-// UNTESTED on hardware: check that tone() works on the UNO Q core and that the LCD runs from its supply.
+// There is no temperature part on this board: the laptop sends the NASA Diviner temperature (V) and the hot / cold
+// state that goes with it (Z), and the LEDs, the buzzer and the LCD follow them.
+//
+// Pins: A1 joystick VRx | A2 joystick VRy | D6 joystick SW (INPUT_PULLUP, pressed = LOW) | D3 green LED | D4 blue LED
+//       D5 red LED | A0 yellow LED | D7 passive buzzer + | D8 D9 LCD RS E | D10..D13 LCD D4..D7
+//       SDA SCL OLED SSD1306 0x3C | 3V3 joystick + and OLED VCC (keeps the analog outputs under 3.3 V)
+// D2 is not connected. Never put 5 V on an input pin of this board.
+// Libraries: LiquidCrystal, Adafruit SSD1306, Adafruit GFX.
+// UNTESTED on hardware: check that tone() and analogReadResolution() work on the UNO Q core and that the LCD runs from its supply.
 #include <LiquidCrystal.h>
-#include <DHT.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 
 #define FW_VERSION 2
-const int PIN_DHT = 2, GREEN = 3, BLUE = 4, RED = 5, YELLOW = A0, BUZZER = 7;
+const int GREEN = 3, BLUE = 4, RED = 5, YELLOW = A0, BUZZER = 7;
+const int JOY_X = A1, JOY_Y = A2, JOY_SW = 6;
 LiquidCrystal lcd(8, 9, 10, 11, 12, 13);          // RS, E, D4, D5, D6, D7
-DHT dht(PIN_DHT, DHT11);
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 bool oledOk = false;
 
 enum State { NORMAL = 0, COLD = 1, HOT = 2 };
 State state = NORMAL;
 int meters[4] = {100, 100, 100, 100};            // power, oxygen, food, shield
-int hearts = 15, samples = 0;
-bool gameOver = false, showCustom = false, virtualOn = false;
+int hearts = 5, samples = 0;
+bool gameOver = false, showCustom = false;
 char custom[2][17];
-float virtualTemp = 0;
-unsigned long tVirtual = 0, tSensor = 0, tLcd = 0, tOled = 0, tBlink = 0, tPickup = 0, tChirp = 0;
+int tempC = 0;                                    // lunar surface temperature from the laptop (V,tempC)
+int cx = 512, cy = 512;                           // joystick centre, measured at power-up
+unsigned long tJoy = 0, tLcd = 0, tOled = 0, tBlink = 0, tPickup = 0, tChirp = 0;
 bool dirtyLcd = true, dirtyOled = true, blinkOn = false;
 char rx[64];
 byte rxLen = 0;
@@ -46,8 +50,8 @@ void showLcd() {
   char l1[20], l2[20];
   if (showCustom)        { snprintf(l1, 20, "%s", custom[0]); snprintf(l2, 20, "%s", custom[1]); }
   else if (gameOver)     { strcpy(l1, "OUTPOST LOST"); strcpy(l2, ""); }
-  else if (state == HOT) { strcpy(l1, "!! HOT !!"); strcpy(l2, "COOLING"); }
-  else if (state == COLD){ strcpy(l1, "!! COLD !!"); strcpy(l2, "HEATING"); }
+  else if (state == HOT) { strcpy(l1, "!! HOT !!"); snprintf(l2, 20, "COOLING %dC", tempC); }
+  else if (state == COLD){ strcpy(l1, "!! COLD !!"); snprintf(l2, 20, "HEATING %dC", tempC); }
   else {
     snprintf(l1, 20, "PWR %-3d O2 %-3d", meters[0], meters[1]);
     snprintf(l2, 20, "FOOD %-3d SHLD %-3d", meters[2], meters[3]);
@@ -61,7 +65,7 @@ void showOled() {
   oled.clearDisplay();
   oled.setTextColor(SSD1306_WHITE);
   oled.setTextSize(2);
-  oled.setCursor(0, 4);  oled.print("BASE "); oled.print(hearts); oled.print("/15");
+  oled.setCursor(0, 4);  oled.print("BASE "); oled.print(hearts); oled.print("/5");
   oled.setCursor(0, 36); oled.print("SAMPLES "); oled.print(samples);
   oled.display();
 }
@@ -76,16 +80,16 @@ void handleLine(char* s) {
   else if (!strcmp(s, "P"))               { tPickup = millis(); if (!tPickup) tPickup = 1; tChirp = millis(); }
   else if (!strcmp(s, "BZ"))              { tChirp = millis(); if (!tChirp) tChirp = 1; }
   else if (s[0] == 'Z' && s[1] == ',')    { setState((State)constrain(atoi(s + 2), 0, 2)); }
-  else if (s[0] == 'V' && s[1] == ',')    { virtualOn = true; virtualTemp = atof(s + 2); tVirtual = millis(); }
+  else if (s[0] == 'V' && s[1] == ',')    { int v = (int)atof(s + 2); if (v != tempC) { tempC = v; if (state != NORMAL) dirtyLcd = true; } }
   else if (s[0] == 'M' && s[1] == ',') {
     char* p = s + 2;
     for (int i = 0; i < 4; i++) { meters[i] = constrain(atoi(p), 0, 100); p = strchr(p, ','); if (!p) break; p++; }
     dirtyLcd = true;
   }
-  else if (s[0] == 'H' && s[1] == ',')    { hearts = constrain(atoi(s + 2), 0, 15); dirtyOled = true; }
+  else if (s[0] == 'H' && s[1] == ',')    { hearts = constrain(atoi(s + 2), 0, 5); dirtyOled = true; }
   else if (s[0] == 'E' && s[1] == ',')    { samples = atoi(s + 2); dirtyOled = true; }
   else if (!strcmp(s, "G"))               { gameOver = true; dirtyLcd = true; }
-  else if (!strcmp(s, "R"))               { gameOver = false; showCustom = false; virtualOn = false; state = NORMAL; hearts = 15; samples = 0; dirtyLcd = dirtyOled = true; }
+  else if (!strcmp(s, "R"))               { gameOver = false; showCustom = false; state = NORMAL; hearts = 5; samples = 0; dirtyLcd = dirtyOled = true; }
   else if (s[0] == 'L' && s[1] == ',') {
     const char* bar = strchr(s + 2, '|');
     int n1 = bar ? bar - (s + 2) : strlen(s + 2);
@@ -104,8 +108,26 @@ void readSerial() {                               // one line at a time, never b
   }
 }
 
-void sendW(float t, int hum) {
-  Serial.print("W,"); Serial.print(t, 1); Serial.print(','); Serial.print(hum); Serial.print(','); Serial.println((int)state);
+int norm(int raw, int center) {                   // ADC reading to -100..100 with a dead zone
+  int span = (raw >= center) ? (1023 - center) : center;
+  if (span < 1) span = 1;
+  int v = (int)((long)(raw - center) * 100 / span);
+  return (abs(v) < 8) ? 0 : constrain(v, -100, 100);
+}
+
+void setupJoystick() {                            // the stick must be untouched at power-up: this is its centre
+  analogReadResolution(10);
+  pinMode(JOY_SW, INPUT_PULLUP);
+  long sx = 0, sy = 0;
+  for (int i = 0; i < 16; i++) { sx += analogRead(JOY_X); sy += analogRead(JOY_Y); }
+  cx = sx / 16; cy = sy / 16;
+}
+
+void sendJoystick() {                             // every 33 ms: J,x,y,sw
+  Serial.print("J,");
+  Serial.print(norm(analogRead(JOY_X), cx)); Serial.print(',');
+  Serial.print(-norm(analogRead(JOY_Y), cy)); Serial.print(',');   // flip so forward is positive
+  Serial.println(digitalRead(JOY_SW) == LOW ? 1 : 0);
 }
 
 void outputs(unsigned long now) {
@@ -128,7 +150,7 @@ void setup() {
   Serial.begin(115200);
   pinMode(GREEN, OUTPUT); pinMode(BLUE, OUTPUT); pinMode(RED, OUTPUT); pinMode(YELLOW, OUTPUT); pinMode(BUZZER, OUTPUT);
   lcd.begin(16, 2);
-  dht.begin();
+  setupJoystick();
   Wire.begin();
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
   showLcd(); showOled();
@@ -137,12 +159,7 @@ void setup() {
 void loop() {
   unsigned long now = millis();
   readSerial();
-  if (now - tSensor >= 2000) {                    // the DHT11 reading goes to the laptop every 2 s
-    tSensor = now;
-    float t = dht.readTemperature(), h = dht.readHumidity();
-    if (!isnan(t) && !isnan(h)) sendW(t, (int)h);
-    else if (virtualOn && now - tVirtual < 4000) sendW(virtualTemp, -1);
-  }
+  if (now - tJoy >= 33) { tJoy = now; sendJoystick(); }                               // joystick to the laptop, 30 times a second
   if (dirtyLcd && now - tLcd >= 200)   { tLcd = now; dirtyLcd = false; showLcd(); }     // at most 5 redraws a second
   if (dirtyOled && now - tOled >= 250) { tOled = now; dirtyOled = false; showOled(); }
   outputs(now);

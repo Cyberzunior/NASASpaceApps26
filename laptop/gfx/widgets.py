@@ -78,13 +78,20 @@ def overlay(surf, color, alpha, size=None):
     surf.blit(s, (0, 0))
 
 
-def bar(surf, rect, frac, color, ticks=4, flash=None):
-    """A meter: dark track, bright fill with a lit top half and a hot tip, tick marks. No allocations."""
+def bar(surf, rect, frac, color, ticks=4, flash=None, ghost=None, gain=0.0):
+    """A meter: dark track, bright fill with a lit top half and a hot tip, tick marks. No allocations.
+    ghost (0..1): where the value was before a sudden loss, shown as a pale block that drains away.
+    gain (0..1): how strongly the fill glows white after a sudden gain."""
     rect = pygame.Rect(rect)
     r = rect.h // 2
     pygame.draw.rect(surf, K.TRACK, rect, border_radius=r)
     c = flash or color
+    if gain > 0.02:
+        c = K.mix(c, K.WHITE, 0.7 * gain)
     w = int((rect.w - 4) * max(0.0, min(1.0, frac)))
+    if ghost is not None and ghost > frac + 0.004:
+        gw = int((rect.w - 4) * max(0.0, min(1.0, ghost)))
+        pygame.draw.rect(surf, (236, 226, 226), (rect.left + 2 + max(0, w - 4), rect.top + 3, gw - max(0, w - 4), rect.h - 6), border_radius=r)
     if w > 2:
         fill = pygame.Rect(rect.left + 2, rect.top + 2, w, rect.h - 4)
         pygame.draw.rect(surf, K.mix(c, (0, 0, 0), 0.22), fill, border_radius=r)
@@ -285,12 +292,16 @@ class Toasts:
             y += 50
 
 
-def banner(surf, cx, y, title, sub, color, t, icon="warn"):
+def banner(surf, cx, y, title, sub, color, t, icon="warn", appear=1.0):
     """The big pulsing warning banner: tinted plate, hazard stripes at both ends, warning triangle."""
     w = max(fonts.width(title, 32, bold=True), fonts.width(sub, 21)) + 220
     r = pygame.Rect(0, 0, w, 96)
     r.midtop = (cx, y)
     p = 0.5 + 0.5 * math.sin(t * 7)
+    if appear < 1.0:                                               # a new banner drops in and flashes bright
+        e = 1.0 - (1.0 - max(0.0, appear)) ** 3
+        r.y -= int((1.0 - e) * 46)
+        p = max(p, 1.0 - e)
     key = ("banner", w, tuple(color))
     s = _overlays.get(key)
     if s is None:

@@ -35,3 +35,28 @@
    D5 D6 D9 D10, AccelStepper pan on D4 D7 D8 D12, no HC-SR04, no TB6612), `firmware/robot/camera_stream.py` (C920 MJPEG).
 5. NASA data: `tools/fetch_nasa_data.py` -> `data/nasa/` + `SOURCES.md`; game reads disk only.
 6. Section 2 (3D chase-camera view) built last, in `gfx/world.py`.
+
+## Revision 2 (Nov 15): joystick, laser tower, Diviner-only temperature
+Step 0 findings: the repo already held the first conversion (connections bar, samples, meters, debrief, DRV8833 rover, C920
+stream, intro, NASA loaders, and a 3D chase view). The IO scheme is unchanged: newline-framed ASCII lines, `I?` / `I,<role>,2`,
+`P,seq,us` / `Q,seq,us`, lost after 2 s. New and changed lines, all told apart by field count like `P` and `W` already were:
+
+| Meaning | Wire line | Note |
+|---|---|---|
+| joystick, HUD panel to laptop | `J,x,y,sw` | every 33 ms, x right, y forward, -100..100 |
+| jiggle the tower servo | `J` (bare) | laptop to tower |
+| impact result | `K,1` hit, `K,0` miss | bare `K` still decodes as "result not known" |
+| beam back up | `Z` (bare) | `Z,state` stays the HUD panel's thermal state |
+| one distance reading | `R` (bare) asks, the tower answers `R,cm` | the spec's bare number became `R,cm` so it is a framed line |
+| lunar temperature to HUD panel | `V,tempC` | once a second, only while the panel is connected |
+
+Choices made (the spec said not to stop and ask):
+1. The tower sketch is line framed and answers `I?` and pings, not single characters, because that is the suite's scheme. Its waits and
+   stepper moves keep servicing serial so the link never reads "lost" during the 5 to 6 s sequence.
+2. The hot / cold state still travels as `Z,state` (same thresholds as the game), and `V,tempC` carries the number shown on the LCD.
+3. Thermal thresholds stay fractions of the Diviner table's night-to-day range (`THERMAL_HOT_FRAC`, `THERMAL_COLD_FRAC`).
+4. On screen the marked spot is `STRIKE_LEAD_M` ahead of the rover. With the tower, `K,1` / `K,0` decides; without it (or with no
+   `W` within 8 s of `F`, or no `K` 2 s after the countdown) a strike hits unless the rover went faster than 30 percent of full speed.
+5. The 3D chase view (section 2) was already in the repo, so it was left as it is. `VIEW_3D = False` gives the top-down map.
+6. The intro was authored on a 6 s timeline; it now plays in `INTRO_S` = 5 s.
+7. The temperature part, the armed LED, the pan servo, the tower tuning line and the unused `scenario.json` are gone.

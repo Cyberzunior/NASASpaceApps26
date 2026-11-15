@@ -34,8 +34,9 @@ def get(size, mono=False, bold=False, display=False):
             elif mono:
                 path = _file(FILES["mono_bold" if bold else "mono"])
                 _cache[key] = pygame.font.Font(path, size) if path else pygame.font.SysFont(MONO_FALLBACK, size, bold=bold)
-            else:
-                _cache[key] = pygame.font.SysFont(SANS, size, bold=bold)
+            else:                                                  # body text: JetBrains Mono, the system sans only if the files are missing
+                path = _file(FILES["mono_bold" if bold else "mono"])
+                _cache[key] = pygame.font.Font(path, size) if path else pygame.font.SysFont(SANS, size, bold=bold)
         except Exception:
             _cache[key] = pygame.font.Font(None, int(size * 1.2))
     return _cache[key]

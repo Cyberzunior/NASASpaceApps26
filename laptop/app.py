@@ -22,6 +22,7 @@ from devio import recorder
 from devio.camera import Camera
 from devio.discovery import SerialScanner, UdpHub
 from devio.gamepad import InputThread, rumble
+from devio import pad as padmod
 from devio.connections import Connections
 from devio.keyboard_fallback import read_keys
 from devio.links import HudLink, RobotLink, TowerLink, link_thread
@@ -79,6 +80,7 @@ class App:
         self.intro = None
         self.intro_played = False
         self.pan_deg, self.pan_sent, self.t_pan = 0.0, 0, 0.0
+        self.fade = 0.0
         self.sm = StateMachine(self._on_state)
         self.audio = None
         self.world_view = self.postfx = self.hud = None
@@ -91,7 +93,7 @@ class App:
         self.pad_button_seen = False
         self.cam_full = False
         self.debug_on = self.args.debug
-        self.fps, self.frame_ms, self.worst_ms, self._fps_n, self._fps_t, self._slow_s = 60.0, 16.0, 0.0, 0, now(), 0
+        self.fps, self.frame_ms, self.worst_ms, self._fps_n, self._fps_t = 60.0, 16.0, 0.0, 0, now()
         self.estop = False
         self.start_down = None
         self.nav_t, self.back_held = 0.0, None
@@ -137,6 +139,7 @@ class App:
             field = r.field
         if a.sim_tower:
             t = sd.SimTower()
+            t.rover_in_spot = lambda: (self.game.strike or {}).get("vmax", 0.0) <= C.STRIKE_DODGE_SPEED   # stayed put = hit
             self.sim_tower = t
             self.sims.append(t)
             self.scanner.add_sim("SIM-TOWER", t.port, "tower")
@@ -233,9 +236,9 @@ class App:
     # ------------------------------------------------------------------ pads
     def _scan_pads(self):
         try:
-            pygame.joystick.init()
+            padmod.init()
             if pygame.joystick.get_count() > 0:
-                self._set_pad(pygame.joystick.Joystick(0))
+                self._set_pad(padmod.open_pad(0))
         except Exception as e:
             self.log("pad scan failed: %r" % e)
         if self.state.pad is None and not self.sim_all:
@@ -251,7 +254,8 @@ class App:
         d = self.state.devices["pad"]
         with self.state.lock:
             d.connected, d.where = True, self.pad_name
-        self.log("gamepad: %s (%d axes, %d buttons)" % (self.pad_name, pad.get_numaxes(), pad.get_numbuttons()))
+        self.log("gamepad: %s (%d axes, %d buttons, %s layout)" % (self.pad_name, pad.get_numaxes(), pad.get_numbuttons(),
+                                                                  "standard SDL" if pad.standard else "raw, set by config.py"))
 
     def _pad_gone(self):
         self.state.pad = None
@@ -273,6 +277,8 @@ class App:
             self.audio.play("pause")
         if new in (S.MENU, S.SETTINGS, S.HWCHECK, S.CALIBRATE, S.PAUSE, S.GAMEOVER, S.RESULTS):
             st.ap_cmd = (0.0, 0.0)
+        if not ({old, new} <= {S.PLAY, S.PRACTICE, S.PAUSE} or new == S.GAMEOVER):
+            self.fade = 1.0                                      # every new screen fades in from black (not pause, not the failure sequence)
 
     def goto(self, name):
         if name == S.HWCHECK:
@@ -291,9 +297,7 @@ class App:
         self.game.reset(practice=practice, intro=intro)
         self.intro_played = True
         self.hud.reset(self.game)
-        self.world_view.parts.p.clear()
-        self.world_view.parts.rings.clear()
-        self.world_view.track.clear()
+        self.world_view.reset_fx()
         self.gameover_fx = None
         self.estop = False
         self.damage = 0.0
@@ -430,6 +434,9 @@ class App:
             elif a == "recenter":
                 self.pan_deg = 0.0
                 self.toast("Camera centred")
+            elif a == "fire":
+                if g.fire_test_asteroid():
+                    self.toast("Test shot", "warn")
             elif isinstance(a, str) and a.startswith("act"):
                 msg = g.action(int(a[3:]))
                 if msg:
@@ -442,7 +449,11 @@ class App:
         elif st == S.PAUSE:
             self.pause.handle(self, "confirm" if a == "ap" else a)
         elif st == S.MENU:
-            self.menu.handle(self, a)
+            if a == "fire":                                            # Test shot from the menu: straight to the tower
+                ok = self.links["tower"].fire(test=True)
+                self.toast("Test shot sent to the tower" if ok else "Test shot: tower not connected (or fired within 2 s)", "warn")
+            else:
+                self.menu.handle(self, a)
         elif st == S.SETTINGS:
             self.settings.handle(self, a)
         elif st == S.CALIBRATE:
@@ -494,23 +505,16 @@ class App:
         a = self.KEYMAP.get(k)
         if a in ("recenter", "act1", "act2", "act3", "act4") and st not in S.FLYING:
             return None
+        if a == "fire" and st == S.MENU:
+            return a
         if a in ("ap", "cam", "fire") and st not in S.FLYING and st != S.CALIBRATE:
             return "back" if a == "cam" and st != S.HWCHECK else None
         return a
 
-    def _sim_air_key(self, k):
-        h = self.sim_hud
-        if h is None:
-            return False
-        temp = {pygame.K_7: 40.0, pygame.K_8: 12.0, pygame.K_9: 25.0}.get(k)
-        if temp is None:
-            return False
-        h.set_air(temp)
-        self.toast("Simulated sensor: %.0f C" % temp)
-        return True
-
     def _button(self, b):
         st = self.sm.state
+        if b == C.BTN_FIRE and (st in S.FLYING or st in (S.MENU, S.CALIBRATE)):   # RB: the test shot, like the X key
+            return "fire"
         if st in S.FLYING and b in C.BTN_ACTIONS:
             return "act%d" % (C.BTN_ACTIONS.index(b) + 1)
         if b == C.BTN_BACK:
@@ -538,39 +542,49 @@ class App:
                     continue
                 if self.sm.state == S.MENU and (e.key in (pygame.K_TAB, pygame.K_F5) or self.menu.typing) and self.menu.on_key(self, e):
                     continue
-                if self.sm.state in (S.PLAY, S.PRACTICE, S.MENU, S.PAUSE) and self._sim_air_key(e.key) and self.args.sim_hud:
-                    continue
                 a = self._key(e)
             elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and self.sm.state == S.MENU:
                 self.menu.on_click(self, e.pos)
-            elif e.type == pygame.JOYBUTTONDOWN:
-                self.pad_button_seen = True
-                if self.game.intro_on and self.sm.flying():
-                    self.game.skip_intro()
+            elif e.type in (pygame.JOYBUTTONDOWN, pygame.JOYBUTTONUP, pygame.CONTROLLERBUTTONDOWN, pygame.CONTROLLERBUTTONUP):
+                b = padmod.button_number(self.state.pad, e)           # a standard pad: controller events only, else joystick events
+                if b is None:
                     continue
-                a = self._button(e.button)
-            elif e.type == pygame.JOYBUTTONUP:
-                if e.button == C.BTN_RESTART:
-                    self.start_down = None
-                if e.button == C.BTN_BACK:
-                    self.back_held = None
+                kind, n = b
+                if kind == "dpad":
+                    a = n
+                elif kind == "down":
+                    self.pad_button_seen = True
+                    if self.game.intro_on and self.sm.flying():
+                        self.game.skip_intro()
+                        continue
+                    a = self._button(n)
+                else:
+                    if n == C.BTN_RESTART:
+                        self.start_down = None
+                    if n == C.BTN_BACK:
+                        self.back_held = None
             elif e.type == pygame.JOYHATMOTION:
+                if self.state.pad is not None and self.state.pad.standard:
+                    continue                                              # the d-pad arrives as controller buttons
                 x, y = e.value
                 a = "left" if x < 0 else "right" if x > 0 else "up" if y > 0 else "down" if y < 0 else None
             elif e.type == pygame.JOYDEVICEADDED:
                 try:
-                    self._set_pad(pygame.joystick.Joystick(e.device_index))
-                    self.toast("Gamepad connected: " + self.pad_name, "ok")
-                    self.audio and self.audio.play("connect")
+                    if self.state.pad is None:                            # the first pad wins; a second one is ignored
+                        self._set_pad(padmod.open_pad(e.device_index))
+                        self.toast("Gamepad connected: " + self.pad_name, "ok")
+                        self.audio and self.audio.play("connect")
                 except Exception as ex:
                     self.log("pad add failed: %r" % ex)
             elif e.type == pygame.JOYDEVICEREMOVED:
+                if self.state.pad is not None and getattr(self.state.pad, "instance_id", None) not in (None, e.instance_id):
+                    continue                                              # some other pad went away
                 self._pad_gone()
                 self.toast("Gamepad disconnected: pair it again in Bluetooth settings", "warn")
                 self.audio and self.audio.play("disconnect")
             if a:
                 self._action(a)
-        # keyboard drive (the mixer thread uses it only while the pad is idle)
+        # keyboard drive: always on (the mixer takes whichever input is pushed furthest)
         self.state.keys = read_keys() if self.sm.flying() else (0.0, 0.0)
         # long presses: hold Start 2 s = re-sync, Back + Start held 1 s = emergency stop
         t = now()
@@ -595,8 +609,17 @@ class App:
     def drain_bus(self):
         for ev in self.bus.drain():
             k = ev.kind
-            if k in ("tower_warn", "tower_k", "hud_temp"):
-                self.game.handle(ev)
+            if k in ("tower_warn", "tower_k"):
+                if self.sm.flying():
+                    self.game.handle(ev)
+                elif k == "tower_warn":                                 # a test shot from the menu or the tower's button
+                    self.toast("Tower: beam down, impact in %.0f s" % ev.data[0], "warn")
+                else:
+                    self.toast("Tower: %s" % {1: "K,1 hit", 0: "K,0 miss"}.get(ev.data[0] if ev.data else -1, "K"), "info")
+            elif k == "joy_button":                                     # the joystick button is the test shot
+                self._action("fire")
+            elif k == "tower_range":
+                self.toast("Tower distance: %.0f cm" % ev.data[0])
             elif k == "bumper":
                 rumble(self.state.pad, 0.8, 300)
                 self.toast("Bumper hit", "warn")
@@ -622,6 +645,9 @@ class App:
                 self.audio.play("heart")
                 rumble(self.state.pad, 0.9, 350)
                 self.hud.hit_flash = 0.35
+            elif kind == "asteroid_miss":
+                self.audio.play("hit", 0.4)
+                rumble(self.state.pad, 0.35, 200)
             elif kind == "asteroid_warn":
                 self.audio.play("incoming")
                 rumble(self.state.pad, 0.3, 200)
@@ -698,6 +724,7 @@ class App:
         self.postfx.update(dt, g.thermal.state if st in S.FLYING or st == S.PAUSE else 0)
         self.hud.update(dt, g)
         self.shake.update(dt)
+        self.fade = max(0.0, self.fade - dt / 0.4)
         self.damage = max(0.0, self.damage - dt * 3.0)
         self.audio.update(speed01, st in S.FLYING and not g.over, st in S.FLYING or st == S.PAUSE)
 
@@ -705,9 +732,10 @@ class App:
         """Q / E and the right stick pan the camera; R recentres. Sends C,angle when it changes (at most 20 per second)."""
         keys = pygame.key.get_pressed()
         d = (1.0 if keys[pygame.K_e] else 0.0) - (1.0 if keys[pygame.K_q] else 0.0)
-        if d == 0.0 and self.state.pad is not None and 0 <= C.AXIS_PAN < len(self.state.raw_axes):
+        pan_axis = getattr(self.state.pad, "pan_axis", C.AXIS_PAN)
+        if d == 0.0 and self.state.pad is not None and 0 <= pan_axis < len(self.state.raw_axes):
             from core.model import shape_axis
-            d = shape_axis(self.state.raw_axes[C.AXIS_PAN])
+            d = shape_axis(self.state.raw_axes[pan_axis])
         self.pan_deg = max(-C.PAN_LIMIT_DEG, min(C.PAN_LIMIT_DEG, self.pan_deg + d * C.PAN_SPEED_DEG_S * dt))
         t = now()
         if int(round(self.pan_deg)) != self.pan_sent and t - self.t_pan >= 0.05:
@@ -728,11 +756,14 @@ class App:
         elif st == S.RESULTS:
             self.results.draw(cv, self)
         else:
-            self.world_view.draw(cv, g, self._ctx())
+            ctx = self._ctx()
+            self.world_view.draw(cv, g, ctx)
+            if ctx["shake"] != (0, 0):                           # the world shakes, the HUD drawn after it stays still
+                cv.scroll(*ctx["shake"])
             if st == S.GAMEOVER and self.gameover_fx:
                 pass
             self.postfx.apply(cv, self.damage)
-            ui = {"conn": self.connections.snapshot(), "ap_on": self.state.ap_on, "camera": self.camera,
+            ui = {"conn": self.connections.snapshot(), "ap_on": self.state.ap_on, "pad_on": self.state.pad is not None, "camera": self.camera,
                   "cam_full": self.cam_full and st in S.FLYING, "debug": self._debug_info() if self.debug_on else None}
             if st in S.FLYING and g.intro_on:
                 alpha = self.intro.draw(self.intro_surf(), g.intro_t)
@@ -755,7 +786,10 @@ class App:
                 self.pause.draw(cv, self)
             if self.hud.hit_flash > 0 and st in S.FLYING:
                 from gfx.widgets import overlay
-                overlay(cv, (255, 30, 30), 150 * self.hud.hit_flash / 0.35)
+                overlay(cv, (255, 30, 30), 95 * min(1.0, self.hud.hit_flash / 0.35))
+        if self.fade > 0.01:
+            from gfx.widgets import overlay
+            overlay(cv, (0, 0, 0), 255 * self.fade * self.fade)
         if self.scaled:
             self.screen.blit(cv, (0, 0))
         else:
@@ -805,15 +839,6 @@ class App:
         self._fps_n += 1
         if now() - self._fps_t >= 1.0:
             self.fps, self._fps_n, self._fps_t = self._fps_n / (now() - self._fps_t), 0, now()
-            if self.postfx and self.sm.state in S.FLYING and self.fps < C.TARGET_FPS and self.postfx.level > 0:
-                self._slow_s += 1
-                if self._slow_s >= 3:                                  # graceful quality drop
-                    self.postfx.level -= 1
-                    self._slow_s = 0
-                    self.toast("Quality lowered to keep %d fps (post-fx %d)" % (C.TARGET_FPS, self.postfx.level), "warn")
-                    self.log("quality lowered: fps %.1f" % self.fps)
-            else:
-                self._slow_s = 0
         return True
 
     def run(self):
@@ -845,8 +870,6 @@ class App:
         self.scanner.close()
         for s in self.sims:
             s.stop()
-        if hasattr(self, "wcsv"):
-            self.wcsv.close()
         pygame.quit()
 
 

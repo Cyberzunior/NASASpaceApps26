@@ -201,18 +201,32 @@ def triage_weather(args):
         check("hud: I? answered I,hud,2", link.line("I,hud", 2.0) is not None)
         link.send("P,1,100")
         check("hud: ping P,seq,us answered by Q,seq,us", link.line("Q,1", 2.0) is not None)
-        line = link.line("W,", 4.0)
-        if not check("hud: W line arrives (DHT11 reading)", line is not None):
+        line = link.line("J,", 2.0)
+        if not check("hud: joystick line J,x,y,sw arrives (every 33 ms)", line is not None):
             return
         v = floats(split_csv(line), 4)
-        if not check("hud: W parses as W,temp,hum,state", v is not None, line):
+        if not check("hud: J parses as J,x,y,sw", v is not None, line):
             return
-        check("hud: temp inside DHT11 range 0-50 C", 0 <= v[1] <= 50, f"{v[1]:.1f} C")
+        check("hud: stick untouched reads 0,0 (centre calibrated at power-up)", v[1] == 0 and v[2] == 0, line)
+
+        def stick(test):
+            end = time.time() + 6.0
+            while time.time() < end:
+                w = floats(split_csv(link.line("J,", 1.0) or ""), 4)
+                if w and test(w):
+                    return True
+            return False
+        pause("then push the joystick FORWARD and hold it")
+        check("hud: forward gives y > 60 (else set JOY_INVERT_Y)", stick(lambda w: w[2] > 60))
+        pause("then push the joystick RIGHT and hold it")
+        check("hud: right gives x > 60 (else set JOY_INVERT_X)", stick(lambda w: w[1] > 60))
+        pause("then press and hold the joystick button")
+        check("hud: button gives sw = 1", stick(lambda w: w[3] == 1))
         link.send("M,80,65,70,40")
-        link.send("H,12")
+        link.send("H,3")
         link.send("E,3")
         ask("hud: LCD shows PWR 80 O2 65 / FOOD 70 SHLD 40", "LCD shows the four numbers on two lines?")
-        ask("hud: OLED shows BASE 12/15 and SAMPLES 3", "OLED shows hearts 12/15 and samples 3?")
+        ask("hud: OLED shows BASE 3/5 and SAMPLES 3", "OLED shows hearts 3/5 and samples 3?")
         link.send("P")
         ask("hud: yellow LED blinks 5 times in 1 s and a short chirp", "Yellow LED blinked 5 times and the buzzer chirped?")
         link.send("Z,2")
@@ -220,8 +234,10 @@ def triage_weather(args):
         link.send("Z,1")
         ask("hud: cold = blue LED blinks, 400 Hz fast beeps, LCD COLD", "Blue LED blinking, fast low beeps, LCD shows COLD?")
         link.send("Z,0")
-        link.send("V,25")
-        check("hud: V,temp accepted (shows as W,temp,-1 only when the DHT11 is dead)", True)
+        link.send("V,118")
+        link.send("Z,2")
+        ask("hud: V,tempC shows on the LCD with the hot warning", "LCD line 2 shows COOLING 118C?")
+        link.send("Z,0")
     finally:
         link.close()
 
@@ -237,16 +253,16 @@ def triage_robot(args):
         link.send("P,1,100")
         if not check("rover: ping answered by Q", link.line("Q,1", 3.0) is not None):
             return
-        link.send("D,170,0,0")
-        ask("rover: LEFT wheel only turns forward at D,170,0,0", "Left wheel forward, right wheel still?")
-        link.send("D,0,170,0")
-        ask("rover: RIGHT wheel only turns forward at D,0,170,0", "Right wheel forward, left wheel still?")
-        link.send("D,170,170,0")
-        ask("rover: both wheels forward at D,170,170,0", "Both wheels forward (W key = forward)?")
-        link.send("D,-170,-170,0")
+        link.send("D,200,0,0")
+        ask("rover: LEFT wheel only turns forward at D,200,0,0", "Left wheel forward, right wheel still?")
+        link.send("D,0,200,0")
+        ask("rover: RIGHT wheel only turns forward at D,0,200,0", "Right wheel forward, left wheel still?")
+        link.send("D,200,200,0")
+        ask("rover: both wheels forward at D,200,200,0", "Both wheels forward (W key = forward)?")
+        link.send("D,-200,-200,0")
         ask("rover: both wheels reverse", "Both wheels backward?")
         link.send("D,0,0,0")
-        link.send("D,170,-170,0")
+        link.send("D,200,-200,0")
         ask("rover: right turn = left wheel forward, right wheel back (D key)", "Rover turns right?")
         link.send("D,0,0,0")
         link.send("C,60")
@@ -269,30 +285,51 @@ def triage_robot(args):
 
 # --------------------------------------------------------------- tower
 def triage_tower(args):
-    print("\n== Asteroid tower (UNO Q, USB serial) ==")
-    print("  safety: nobody in front of the tower; it drops a real paper ball")
+    print("\n== Asteroid tower (UNO R3, USB serial) ==")
+    print("  safety: the green laser is always on. Nobody looks into it; the idle beam points at empty ceiling")
     link = open_serial_link(args, "tower")
     if not link:
         return
     try:
         link.send("I?")
         check("tower: I? answered I,tower,2", link.line("I,tower", 2.0) is not None)
-        ask("tower: armed LED on after boot", "Armed LED lit?")
+        link.send("P,1,100")
+        check("tower: ping P,seq,us answered by Q,seq,us", link.line("Q,1", 2.0) is not None)
+        ask("tower: laser on, beam straight up", "Laser lit and pointing straight up?")
+        pause("put the rover on the track, 40 to 100 cm in front of the tower")
+        link.send("R")
+        line = link.line("R,", 3.0)
+        v = floats(split_csv(line or ""), 2)
+        check("tower: R answered by R,cm inside 10..150 (999 = a loose TRIG / ECHO wire)", bool(v) and 10 <= v[1] <= 150, str(line))
+        link.send("J")
+        ask("tower: J jiggles the push servo once", "Servo jiggled?")
         link.send("F")
-        check("tower: F answered by W,3 (warning) first", link.line("W,3", 2.0) is not None)
-        check("tower: then K about 3 s later", link.line("K", 5.0) is not None)
-        ask("tower: exactly one ball dropped", "Did exactly one paper ball drop?")
-        pause("press the test-fire button on the tower")
-        check("tower: button sends the same W,3 then K", link.line("W,3", 3.0) is not None and link.line("K", 5.0) is not None)
+        link.send("P,2,100")
+        check("tower: pings are answered during the sequence", link.line("Q,2", 2.0) is not None)
+        check("tower: F answered by W,3 once the beam is down", link.line("W,3", 6.0) is not None)
+        ask("tower: beam on the floor just ahead of the rover", "Laser spot on the floor just ahead of the rover? (else TILT_DIR, LASER_H_CM, LEAD_CM)")
+        check("tower: K,1 about 3 s later (the rover stayed in the spot)", link.line("K,1", 5.0) is not None)
+        ask("tower: servo jiggled on the hit and the beam went back up", "Jiggle, then beam straight up again?")
+        time.sleep(2.5)
+        pause("now press Enter, and drive or lift the rover off the track during the countdown")
+        link.send("F")
+        check("tower: second F warns again", link.line("W,3", 6.0) is not None)
+        check("tower: K,0 when the rover left the spot", link.line("K,0", 5.0) is not None)
+        time.sleep(2.5)
+        pause("press the test button on the tower (D2), if fitted")
+        check("tower: button runs the same W,3 then K", link.line("W,3", 8.0) is not None and link.line("K,", 5.0) is not None)
+        link.send("Z")
+        check("tower: Z sent (beam back up)", True)
     finally:
         link.close()
 
 
 # --------------------------------------------------------------- wiring
-# name, pin(s), kind  -> kinds: led active_buzzer tone dht button ultrasonic servo stepper motor lcd i2c
+# name, pin(s), kind  -> kinds: led active_buzzer tone analog button ultrasonic servo stepper motor lcd i2c
 WIRES = {
     "weather": [
-        ("DHT11 data", "D2", "dht"),
+        ("joystick VRx", "A1", "analog"), ("joystick VRy", "A2", "analog"),
+        ("joystick button", "D6", "button"),
         ("green LED", "D3", "led"),
         ("blue LED", "D4", "led"),
         ("red LED", "D5", "led"),
@@ -312,10 +349,12 @@ WIRES = {
         ("right motor DRV8833 IN1/IN2", "D9,D10", "motor2"),
     ],
     "tower": [
+        ("test button (optional)", "D2", "button"),
+        ("tilt stepper IN1", "D4", "stepper"), ("tilt stepper IN2", "D5", "stepper"),
+        ("tilt stepper IN3", "D6", "stepper"), ("tilt stepper IN4", "D7", "stepper"),
         ("push servo", "D9", "servo"),
-        ("pan servo (optional)", "D10", "servo"),
-        ("armed LED", "D13", "led"),
-        ("test-fire button", "D2", "button"),
+        ("HC-SR04 TRIG", "D11", "ultrasonic_trig"), ("HC-SR04 ECHO", "D12", "ultrasonic_echo"),
+        ("green laser (2N2222)", "D13", "led"),
     ],
 }
 
@@ -355,11 +394,9 @@ def triage_wiring(args):
             elif kind == "tone":
                 bench_cmd(link, f"TONE,{pin},1000,800")
                 ask(f"wiring: {name}", f"Beep heard from {name}?")
-            elif kind == "dht":
-                reply = bench_cmd(link, f"DHT,{pin}", 3.0)
-                v = floats(split_csv(reply)[2:], 2) if reply and reply.startswith("OK,DHT") else None
-                ok = v is not None and 0 <= v[0] <= 50 and 20 <= v[1] <= 90
-                check(f"wiring: {name} reads sane", ok, str(reply))
+            elif kind == "analog":
+                reply = bench_cmd(link, f"AR,{pin}")
+                ask(f"wiring: {name} reads mid-scale at rest", f"{name}: bench board answered {reply}. About half of full scale?")
             elif kind == "button":
                 bench_cmd(link, f"WATCH,{pin}")
                 pause(f"press and release {name}")

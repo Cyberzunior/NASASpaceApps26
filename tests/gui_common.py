@@ -21,7 +21,7 @@ BAUD = 115200
 
 # key, label shown in the UI, default target
 DEVICES = [
-    ("weather", "Weather station (UNO R3)", ""),
+    ("weather", "HUD panel (UNO Q)", ""),
     ("robot", "Robot (UNO Q #1)", "192.168.1.50:5005"),
     ("tower", "Tower (UNO Q #2)", "192.168.1.51:5005"),
     ("bench", "Bench board (PinTester)", ""),

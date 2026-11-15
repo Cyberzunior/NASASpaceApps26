@@ -113,8 +113,10 @@ def _rear_master(w=480):
 class Rover:
     """draw_top(): the rover seen from above on the map. draw_back(): the same base seen from behind (chase view, intro)."""
 
-    def __init__(self, scale):
+    def __init__(self, scale, quant=8):
         self.S = scale
+        self.quant = quant               # rear sprite width step in pixels (finer = smoother size changes, more sprites)
+        self.rot = {}                    # leaned rear sprites, (width key, angle) -> surface
         self.t = 0.0
         self.headlight = glow_add(60, (255, 240, 200), 1.8)
         self.cache = {}
@@ -159,33 +161,53 @@ class Rover:
         surf.blit(img, img.get_rect(center=(int(x), int(y))))
 
     def _rear(self, w):
-        """Rear sprite at body width w (quantized to 8 px so the growing intro rover reuses sprites)."""
+        """Rear sprite at body width w (quantized so the growing intro rover reuses sprites)."""
         if self.master is None:
             self.master = _rear_master()
-        key = max(8, int(w) // 8 * 8)
+        key = max(8, int(w) // self.quant * self.quant)
         if key not in self.rear:
             if len(self.rear) > 24:
                 self.rear.clear()
+                self.rot.clear()
             img, c, mast, tail_y = self.master
             k = key / 480.0
             self.rear[key] = (pygame.transform.smoothscale(img, (int(img.get_width() * k), int(img.get_height() * k))),
                               (c[0] * k, c[1] * k), (mast[0] * k, mast[1] * k), tail_y * k, k)
         return self.rear[key]
 
-    def draw_back(self, surf, cx, cy, w, lights_on, t):
-        """Rear view for the chase camera and the intro: shaded body, treaded wheels, solar wings, dish, blinking beacon."""
+    def draw_back(self, surf, cx, cy, w, lights_on, t, lean=0.0):
+        """Rear view for the chase camera and the intro: shaded body, treaded wheels, solar wings, dish, blinking beacon.
+        lean (degrees, + = top to the left) rolls the whole base a little in a turn."""
         img, c, mast, tail_y, k = self._rear(w)
         ox, oy = cx - c[0], cy - c[1]
-        surf.blit(img, (ox, oy))
+        px, py = ox + img.get_width() / 2, oy + img.get_height() / 2          # the sprite centre: the roll pivot
+        q = round(lean * 2.0) / 2.0
+        if q:
+            key = (img.get_width(), q)
+            rot = self.rot.get(key)
+            if rot is None:
+                if len(self.rot) > 60:
+                    self.rot.clear()
+                rot = self.rot[key] = pygame.transform.rotozoom(img, q, 1.0)
+            surf.blit(rot, rot.get_rect(center=(int(px), int(py))))
+            ca, sa = math.cos(math.radians(q)), math.sin(math.radians(q))
+        else:
+            surf.blit(img, (ox, oy))
+            ca, sa = 1.0, 0.0
+
+        def at(x, y):                                                         # a sprite point after the roll
+            dx, dy = x - px, y - py
+            return int(px + dx * ca + dy * sa), int(py - dx * sa + dy * ca)
+
         blink = int(t * 3) % 2
-        bx, by = int(ox + mast[0]), int(oy + mast[1])
+        bx, by = at(ox + mast[0], oy + mast[1])
         if blink:
             g = glow_add(max(6, int(44 * k)), (230, 50, 40), 2.0)
             surf.blit(g, (bx - g.get_width() // 2, by - g.get_height() // 2), special_flags=pygame.BLEND_RGB_ADD)
         pygame.draw.circle(surf, K.RED if blink else (90, 40, 44), (bx, by), max(3, int(11 * k)))
         if lights_on:                                                         # tail lights, on once the base wakes up
             for sx in (-1, 1):
-                lx, ly = int(cx + sx * w * 0.38), int(oy + tail_y)
+                lx, ly = at(cx + sx * w * 0.38, oy + tail_y)
                 g = glow_add(max(6, int(70 * k)), (200, 46, 30), 2.0)
                 surf.blit(g, (lx - g.get_width() // 2, ly - g.get_height() // 2), special_flags=pygame.BLEND_RGB_ADD)
                 pygame.draw.rect(surf, (255, 96, 70), (lx - 22 * k, ly - 10 * k, 44 * k, 20 * k), border_radius=max(1, int(5 * k)))
