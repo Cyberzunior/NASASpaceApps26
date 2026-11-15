@@ -48,4 +48,4 @@ flashes, ISS Veggie facts) and writes `data/nasa/SOURCES.md`. Set `NASA_API_KEY`
 ## Status
 Software checked headless with simulated devices (`python -m pytest tests`). **Nothing has met real hardware yet**: HUD panel, tower and
 rover sketches are not compiled or uploaded, PWM on D5 D6 D9 D10 is unverified, the camera stream is untested, and V_MAX / W_MAX are placeholders
-until the rover is measured with `python laptop/tools/calibrate_robot.py`. The 3D chase-camera view is not built yet (the game uses a top-down lunar view).
+until the rover is measured with `python laptop/tools/calibrate_robot.py`. The 3D chase-camera view is a perspective projection in pygame (`VIEW_3D` in config.py; set it False for the top-down map).

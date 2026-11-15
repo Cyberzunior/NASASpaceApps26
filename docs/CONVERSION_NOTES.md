@@ -34,4 +34,4 @@
 4. Firmware: HUD panel (UNO Q, tone on D7, OLED), tower (serial, warn/fire/K), robot (one DRV8833 channel per motor,
    D5 D6 D9 D10, AccelStepper pan on D4 D7 D8 D12, no HC-SR04, no TB6612), `firmware/robot/camera_stream.py` (C920 MJPEG).
 5. NASA data: `tools/fetch_nasa_data.py` -> `data/nasa/` + `SOURCES.md`; game reads disk only.
-6. Not touched until the rest works: section 2 (3D view).
+6. Section 2 (3D chase-camera view) built last, in `gfx/world.py`.

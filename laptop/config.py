@@ -151,6 +151,11 @@ WINDOW_H = 900
 VSYNC = True
 DEMO_MODE = False
 PX_PER_M = 34.0
+VIEW_3D = True            # chase camera behind the rover; False = the top-down map
+CAM_BACK_M = 7.0          # chase camera distance behind the rover
+CAM_HEIGHT_M = 3.6
+CAM_FOCAL = 1000.0
+HORIZON_FRAC = 0.36
 PRIVACY_NO_SAVE_FRAMES = True
 LOG_KEEP = 20
 

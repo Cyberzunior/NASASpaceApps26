@@ -8,6 +8,7 @@ import config as C
 from core.game import KINDS
 from gfx import palette as K
 from gfx.particles import Particles
+from gfx.starfield import Starfield
 from gfx.rover import Rover, glow_sprite
 
 SAMPLE_COLORS = {"ice": (140, 225, 255), "regolith": (225, 150, 80), "mineral": (230, 110, 255)}
@@ -64,9 +65,39 @@ class WorldView:
         self.dark = 0.0
         self.storm_t = 0.0
         self.shift = (0.0, 0.0)
+        self.mode3d = C.VIEW_3D
+        self.stars = Starfield()
+        self.horizon = int(self.H * C.HORIZON_FRAC)
+        self.ground3d = self._ground_gradient()
+        self.theta = 270.0
+
+    def _ground_gradient(self):
+        h = self.H - self.horizon
+        s = pygame.Surface((self.W, h))
+        for y in range(h):
+            f = (y / h) ** 0.6
+            c = (int(60 + 62 * f), int(60 + 63 * f), int(65 + 65 * f))
+            pygame.draw.line(s, c, (0, y), (self.W, y))
+        return s.convert()
+
+    # ---- 3D projection: x forward, lateral right, from a camera behind and above the rover
+    def project(self, x, y):
+        """World metres -> (screen x, screen y, depth). depth <= 0.6 means behind the camera."""
+        dx, dy = x - self.cam[0], y - self.cam[1]
+        a = math.radians(self.theta)
+        fwd = dx * math.cos(a) + dy * math.sin(a)
+        right = -dx * math.sin(a) + dy * math.cos(a)
+        z = fwd + C.CAM_BACK_M
+        if z <= 0.6:
+            return self.W / 2, self.H, z
+        k = C.CAM_FOCAL / z
+        return self.W / 2 + right * k, self.horizon + C.CAM_HEIGHT_M * k, z
 
     # ---- coordinates
     def px(self, x, y):
+        if self.mode3d:
+            sx, sy, z = self.project(x, y)
+            return (sx, sy) if z > 0.6 else (-999, -999)
         return self.W / 2 + (x - self.cam[0]) * self.S, self.H / 2 + (y - self.cam[1]) * self.S
 
     def update(self, dt, game, speed01):
@@ -74,6 +105,8 @@ class WorldView:
         self.rover.update(dt)
         c = game.craft
         self.cam = (c.x, c.y)
+        self.theta = c.theta
+        self.stars.update(dt)
         self.parts.update(dt)
         h = game.thermal.local_hour()                              # dusk and dawn fade over one lunar hour
         target = max(0.0, 1.0 - min(abs(h - 6.0), abs(h - 18.0))) if game.thermal.daylight() else 1.0
@@ -177,8 +210,84 @@ class WorldView:
                 y = rnd.randrange(self.H)
                 pygame.draw.line(surf, (220, 190, 255), (x, y), (x + rnd.randint(-8, 8), y + rnd.randint(10, 34)), 1)
 
+    def draw3d(self, surf, game, ctx):
+        """Chase camera: black sky with stars, grey ground with craters and rocks, the rover seen from behind at the bottom centre."""
+        W, H, hz = self.W, self.H, self.horizon
+        self.stars.draw(surf, (0, 0), (self.theta / 90.0, 0))
+        pygame.draw.rect(surf, (0, 0, 0), (0, hz - 2, W, 4))
+        surf.fill((0, 0, 0), (0, 0, W, 0))
+        surf.blit(self.ground3d, (0, hz))
+        pygame.draw.line(surf, (150, 152, 160), (0, hz), (W, hz), 2)
+        items = []
+        R = 46.0
+        cx0, cy0 = self.cam
+        for cx in range(math.floor((cx0 - R) / CELL_M), math.floor((cx0 + R) / CELL_M) + 1):
+            for cy in range(math.floor((cy0 - R) / CELL_M), math.floor((cy0 + R) / CELL_M) + 1):
+                rnd = random.Random(cx * 73856093 ^ cy * 19349663)
+                for _ in range(rnd.choice((0, 1, 1, 2))):
+                    r = rnd.uniform(0.9, 4.2)
+                    wx, wy = (cx + rnd.random()) * CELL_M, (cy + rnd.random()) * CELL_M
+                    items.append((self.project(wx, wy), "c", r))
+                for _ in range(rnd.choice((2, 3, 4))):
+                    r = rnd.uniform(0.2, 0.7)
+                    wx, wy = (cx + rnd.random()) * CELL_M, (cy + rnd.random()) * CELL_M
+                    items.append((self.project(wx, wy), "r", r))
+        items.sort(key=lambda it: -it[0][2])
+        for (sx, sy, z), kind, r in items:
+            if z <= 1.0 or z > R * 1.6 or sx < -300 or sx > W + 300:
+                continue
+            k = C.CAM_FOCAL / z
+            w = r * k
+            fade = max(0.0, min(1.0, 1.0 - (z - 25.0) / 35.0))
+            if kind == "c":
+                h = max(2.0, w * C.CAM_HEIGHT_M / math.hypot(z, C.CAM_HEIGHT_M) * 1.0)
+                rect = pygame.Rect(0, 0, int(w * 2), int(h * 2))
+                rect.center = (int(sx), int(sy))
+                shade = lambda v: int(v * (0.55 + 0.45 * fade) + 112 * (1 - fade) * 0.0)
+                pygame.draw.ellipse(surf, (shade(66), shade(67), shade(72)), rect)
+                inner = rect.inflate(-rect.w * 0.18, -rect.h * 0.18)
+                pygame.draw.ellipse(surf, (shade(88), shade(89), shade(94)), inner.move(0, int(rect.h * 0.04)))
+                pygame.draw.ellipse(surf, (shade(150), shade(152), shade(158)), rect, max(1, int(w * 0.05)))
+            else:
+                rw, rh = max(2, int(w * 1.3)), max(2, int(w * 0.9))
+                body = pygame.Rect(0, 0, rw, rh)
+                body.midbottom = (int(sx), int(sy))
+                pygame.draw.ellipse(surf, (int(84 * (0.6 + 0.4 * fade)),) * 3, body)
+                pygame.draw.ellipse(surf, (int(138 * (0.6 + 0.4 * fade)),) * 3, body.inflate(-rw * 0.4, -rh * 0.4).move(-rw // 10, -rh // 8))
+        if not ctx.get("backdrop"):
+            self.draw_sample3d(surf, game)
+        if not ctx.get("hide_craft") and not ctx.get("backdrop"):
+            self.rover.draw_back(surf, W / 2, H * 0.68, 170, not game.thermal.daylight() or self.dark > 0.2, self.t)
+        self.parts.draw(surf)
+        self.draw_light(surf, game)
+
+    def draw_sample3d(self, surf, game):
+        s = game.sample
+        if not s:
+            return
+        sx, sy, z = self.project(s["x"], s["y"])
+        col = SAMPLE_COLORS[s["kind"]]
+        if z > 1.0 and -80 < sx < self.W + 80:
+            k = C.CAM_FOCAL / z
+            r = max(5, int(0.9 * k))
+            lift = int(r * 1.2 + 4 * math.sin(self.t * 4))
+            g = pygame.transform.smoothscale(self.glows[s["kind"]], (r * 3, r * 3))
+            surf.blit(g, (sx - g.get_width() / 2, sy - lift - g.get_height() / 2))
+            pts = [(sx, sy - lift - r), (sx + r * 0.8, sy - lift), (sx, sy - lift + r), (sx - r * 0.8, sy - lift)]
+            pygame.draw.polygon(surf, col, pts)
+            pygame.draw.polygon(surf, K.WHITE, pts, 2)
+            ring = pygame.Rect(0, 0, int(C.SAMPLE_PICKUP_M * 2 * k), int(C.SAMPLE_PICKUP_M * 2 * k * 0.35))
+            ring.center = (int(sx), int(sy))
+            pygame.draw.ellipse(surf, col, ring, 2)
+        else:                                                    # off screen: marker on the screen edge
+            ex = 40 if sx < 0 or z <= 1.0 and game.sample_bearing() < 0 else self.W - 40
+            pygame.draw.circle(surf, col, (ex, int(self.H * 0.5)), 12)
+            pygame.draw.circle(surf, K.WHITE, (ex, int(self.H * 0.5)), 12, 2)
+
     def draw(self, surf, game, ctx):
         """ctx: dict(ap_on, speed01, shake, hide_craft, backdrop)."""
+        if self.mode3d:
+            return self.draw3d(surf, game, ctx)
         self.draw_ground(surf)
         self.draw_tracks(surf)
         if not ctx.get("backdrop"):
