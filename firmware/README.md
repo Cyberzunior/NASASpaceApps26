@@ -9,7 +9,7 @@
 **None of this has been compiled or run on a board yet.** Every sketch is written against the pin maps in `docs/pin_map.md`.
 
 ## Weather station (UNO R3)
-Libraries: DHT sensor library (+ Adafruit Unified Sensor). For the lives display later: LiquidCrystal I2C (Frank de Brabander) and `#define HAS_LIVES_LCD 1`.
+Libraries: none for the weather station now (no DHT11). For the lives display later: LiquidCrystal I2C (Frank de Brabander) and `#define HAS_LIVES_LCD 1`.
 Replies to `I?` with `I,weather,2`, sends `W,temp,hum,state` every 2 s and at once on every state change.
 
 ## UNO Q: how the two halves talk

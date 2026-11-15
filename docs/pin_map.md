@@ -3,7 +3,8 @@
 ## Weather station: ELEGOO UNO R3 (5 V pins)
 | Pin | Goes to |
 |---|---|
-| D2 | DHT11 data |
+| D2 | free (the DHT11 was removed) |
+| A1 | 10k pot wiper (outer legs 5V / GND): orbit temperature swing, 0 to 12 C, or picks a NASA solar flare in the game |
 | D3 | Green LED (220 ohm) |
 | D4 | Blue LED (220 ohm) |
 | D5 | Red LED (220 ohm) |

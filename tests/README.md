@@ -66,8 +66,8 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
 
 ## What each board gets
 
-- **weather** (UNO R3, USB): `W,temp,hum,state` line arrives and parses, DHT11
-  ranges sane, green LED + LCD normal, hot air turns it HOT (red LED + fast
+- **weather** (UNO R3, USB): `W,temp,hum,state` line arrives and parses, temperature
+  sane (no DHT11 now: 24 C +/- a swing set by the pot on A1), green LED + LCD normal, hot air turns it HOT (red LED + fast
   beeps, 100 ms), cold pack turns it COLD (blue LED + slower beeps, 200 ms), back to NORMAL.
   The single buzzer is on D6; `BZ` makes it beep for 0.5 s.
 - **robot** (UNO Q #1): `S,angle,dist,flags` line, sweep covers about +/-45 deg,
@@ -87,6 +87,6 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
 - Robot on blocks for drive checks; Esc/Ctrl+C stops the script.
 - UNO Q pins are 3.3 V: HC-SR04 ECHO needs the 1k + 2k divider.
 - Keep the tower pointed away from people; `F` drops a real ball.
-- Hair dryer on low, 30 cm from the DHT11; cold pack in a sealed bag.
+- The weather station has no DHT11 any more: the pot on A1 (or a NASA solar flare picked by it in the game) sets the swing.
 - UNO R3 resets when the serial port opens: the script waits 2 s for you.
 - Venue Wi-Fi often isolates devices: use the phone hotspot.

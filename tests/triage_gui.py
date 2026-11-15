@@ -74,7 +74,8 @@ class Tab(QtWidgets.QWidget):
 class WeatherTab(Tab):
     checks = (
         "W,temp,hum,state line arrives about every 2 s",
-        "DHT11 temperature and humidity look right for the room",
+        "Pot on A1: turning it changes the swing in N,pot,swing (0 to 12 C) and the LCD line 2",
+        "Temperature rises and falls over a 60 s orbit (24 C +/- swing)",
         "LCD shows text (if only a blue block: turn the contrast pot)",
         "NORMAL: green LED solid, silent, LCD 'T xx.xC NORMAL' / 'H nn%'",
         "Buzz (BZ): the D6 buzzer beeps for 0.5 s",
@@ -103,6 +104,7 @@ class WeatherTab(Tab):
         self.reading = None          # (temp, hum, state)
         self.game_over = False
         self.custom = None           # (line1, line2) while L,text is pinned
+        self.pot = None              # (raw 0-1023, swing in C) from the last N line
         self.auto = None             # running auto test (a generator), see _auto_steps
         self.auto_wait = None        # (condition on a W reading, deadline)
         self.auto_results = []       # (name, ok, detail)
@@ -111,7 +113,7 @@ class WeatherTab(Tab):
         left = QtWidgets.QVBoxLayout()
         row = QtWidgets.QHBoxLayout()
         self.temp = big("--.- C", 40)
-        self.hum = big("-- %", 28)
+        self.hum = big("pot --", 22)
         self.state = big("NO DATA", 24)
         self.state.setAlignment(Qt.AlignCenter)
         self.state.setMinimumWidth(150)
@@ -133,15 +135,16 @@ class WeatherTab(Tab):
             g.addWidget(hint(expect), i, 1)
         left.addWidget(cmds)
         left.addWidget(hint("Close the game first: only one program can open the UNO R3's COM port. "
-                            "V makes the board ignore the DHT11 until R. Breathe on or warm the DHT11 "
-                            "for a real test (above 30 C is HOT, below 18 C is COLD, 1 C hysteresis)."))
+                            "There is no DHT11 any more: the board simulates 24 C +/- a swing that follows a 60 s orbit, "
+                            "and the pot on A1 (or the game, from a NASA solar flare) sets the swing. "
+                            "V overrides it until R. Above 30 C is HOT, below 18 C is COLD, 1 C hysteresis."))
 
         auto = QtWidgets.QGroupBox("Auto test (about 40 s, the buzzer will beep)")
         al = QtWidgets.QVBoxLayout(auto)
         row = QtWidgets.QHBoxLayout()
         self.auto_btn = QtWidgets.QPushButton("Run auto test")
         self.auto_btn.clicked.connect(lambda: self.stop() if self.auto else self._auto_start())
-        self.auto_status = QtWidgets.QLabel("reads the real DHT11, then walks HOT / COLD and the 1 C hysteresis with V")
+        self.auto_status = QtWidgets.QLabel("checks the W / N lines and the simulated orbit, then walks HOT / COLD and the 1 C hysteresis with V")
         self.auto_status.setWordWrap(True)
         row.addWidget(self.auto_btn)
         row.addWidget(self.auto_status, 1)
@@ -210,6 +213,11 @@ class WeatherTab(Tab):
             self.send("L," + text)
 
     def _on_line(self, line):
+        n = parse_line(line, "N", 2)
+        if n:
+            self.pot = (int(n[0]), n[1] / 10.0)
+            self.hum.setText(f"pot {n[0]:.0f}   swing {n[1] / 10.0:.1f} C")
+            return
         v = parse_line(line, "W", 3)
         if not v:
             return
@@ -217,7 +225,6 @@ class WeatherTab(Tab):
         self.reading = (temp, hum, int(st))
         self.last_t = time.monotonic()
         self.temp.setText(f"{temp:.1f} C")
-        self.hum.setText(f"{hum:.0f} %")
         name, colour = self.STATE.get(int(st), ("?", "#555"))
         self.state.setText(name)
         self.state.setStyleSheet(f"font-size:24px; font-weight:bold; background:{colour}; color:white;"
@@ -297,7 +304,7 @@ class WeatherTab(Tab):
 
         # 1. the real sensor
         self.send("R")
-        self.auto_out.appendPlainText("reading the DHT11 for about 8 s ...")
+        self.auto_out.appendPlainText("reading W and N for about 8 s ...")
         seen = []
         while len(seen) < 4:
             w = yield (lambda r: True, 5.0)
@@ -312,11 +319,14 @@ class WeatherTab(Tab):
         self._check("one W about every 2 s", gaps and all(1.5 <= g <= 2.6 for g in gaps),
                     ", ".join(f"{g:.2f} s" for g in gaps))
         temp, hum, state, _ = seen[-1]
-        self._check("DHT11 temperature plausible (0-50 C)", 0 <= temp <= 50, f"{temp:.1f} C")
-        self._check("DHT11 humidity plausible (20-95 %)", 20 <= hum <= 95, f"{hum:.0f} %")
-        self._check("state matches the real temperature", state in self.expected_states(temp),
+        swing = self.pot[1] if self.pot else None
+        self._check("N line (pot, swing) arrives", self.pot is not None, "no N line" if swing is None else
+                    f"pot {self.pot[0]}, swing {swing:.1f} C")
+        if swing is not None:
+            self._check("temperature is 24 C +/- the swing", abs(temp - 24.0) <= swing + 0.6,
+                        f"{temp:.1f} C, swing {swing:.1f} C")
+        self._check("state matches the temperature", state in self.expected_states(temp),
                     f"{temp:.1f} C is {name[state][0]}")
-        real = temp
 
         # 2. thresholds and hysteresis with simulated temperatures
         for v, want, why in ((35, 2, "35 C -> HOT"), (29.5, 2, "29.5 C stays HOT (1 C hysteresis)"),
@@ -328,11 +338,11 @@ class WeatherTab(Tab):
             self._check(why, w is not None,
                         "" if w else f"last W {last[0]:.1f} C {name.get(last[2], ('?',))[0]}" if last else "no W")
 
-        # 3. back to the real sensor
+        # 3. back to the simulated orbit
         self.send("R")
-        w = yield (lambda r: abs(r[0] - real) <= 2.0, 5.0)
-        self._check("R: back to the real sensor", w is not None and w[2] in self.expected_states(w[0]),
-                    f"{w[0]:.1f} C {name[w[2]][0]}" if w else "no real reading after R")
+        w = yield (lambda r: abs(r[0] - 24.0) <= 12.5 and r[0] != 19.5, 5.0)
+        self._check("R: back to the simulated orbit", w is not None and w[2] in self.expected_states(w[0]),
+                    f"{w[0]:.1f} C {name[w[2]][0]}" if w else "no reading after R")
 
     def results(self):
         return super().results() + [(f"auto: {n}" + (f" ({d})" if d else ""), ok) for n, ok, d in self.auto_results]

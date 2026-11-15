@@ -312,3 +312,17 @@ def test_ultrasonic_scan_confirms_real_debris_and_adds_unknown_objects():
     g.field.tick(0.1, 10.0)
     assert not g.field.detected                            # forgotten after DETECT_TTL_S
     assert g.field.add_scan(g.ghost, 0, 500, 1.0) is None  # out of range is ignored
+
+
+def test_space_weather_pot_picks_a_flare_and_sets_the_swing():
+    import os
+    import tempfile
+    from core import spaceweather as sw
+    assert sw.swing_for("C1.0") == 3.0 and sw.swing_for("M1.0") == 6.0 and sw.swing_for("X10") == 12.0
+    raw = [{"classType": "X1.2", "peakTime": "2026-11-02T10:00Z"}, {"classType": "C3.0", "peakTime": "2026-10-20T01:00Z"},
+           {"classType": "junk", "peakTime": "2026-10-21T01:00Z"}]
+    s = sw.SpaceWeather(cache=os.path.join(tempfile.gettempdir(), "no_such_donki.json"))
+    assert not s.loaded()
+    s._set(sw.parse(raw), "test")
+    assert s.loaded() and s.pick(0)["cls"] == "quiet Sun"       # far left of the pot: quiet Sun, swing 0
+    assert s.pick(1023)["cls"] == "X1.2" and s.pick(1023)["swing"] > 9    # far right: newest flare
