@@ -184,6 +184,9 @@ class Game:
         elif kind == "tower_k":                                 # K,1 hit, K,0 miss, bare K = not known
             if self.strike is not None and self.strike["mode"] == "tower" and self.strike["phase"] == "warn":   # a K before W,3 is stale
                 r = d[0] if d else -1
+                st = self.strike or {}
+                if r == 0 and abs(st.get("bearing", 0)) > C.TOWER_HIT_BEARING_DEG:   # the fixed sensor cannot see that far sideways:
+                    r = int((self.impact_distance() or 99.0) <= C.STRIKE_HIT_M)       # the game's own rule on the on-screen point
                 self._resolve_strike(None if r < 0 else bool(r))
 
     def _warn(self):
@@ -243,10 +246,10 @@ class Game:
             self.fx.append(("gameover", 0, 0, self.first_fail or ""))
             self.log("GAME OVER at T+%.0f s (first failure: %s)" % (self.t, self.first_fail))
 
-    def _impact_point(self):
-        """The marked spot: on the ground just ahead of the rover, like the tower's laser."""
+    def _impact_point(self, bearing=0.0):
+        """The marked spot: on the ground STRIKE_LEAD_M from the rover, at this bearing off its heading (the tower's yaw)."""
         c = self.craft
-        a = math.radians(c.theta)
+        a = math.radians(c.theta + bearing)
         return c.x + math.cos(a) * C.STRIKE_LEAD_M, c.y + math.sin(a) * C.STRIKE_LEAD_M
 
     def _request_strike(self, test=False):
@@ -254,9 +257,11 @@ class Game:
         imp = self.nasa.impacts
         if imp.ok and not test:
             date = imp.events[self.strike_i % len(imp.events)]["date"]
-        ix, iy = self._impact_point()
-        self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy, "vmax": 0.0, "test": test}
-        if self.tower.connected and self.tower.fire(test=test):  # F sent: wait for the tower's W,3
+        bearing = 0 if test else int(round(random.uniform(-C.ASTEROID_CONE_DEG, C.ASTEROID_CONE_DEG)))   # never behind the rover
+        ix, iy = self._impact_point(bearing)
+        self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy, "vmax": 0.0, "test": test,
+                       "bearing": bearing}
+        if self.tower.connected and self.tower.fire(test=test, bearing=bearing):  # F sent: wait for the tower's W,3
             self.strike.update(phase="await", left=C.STRIKE_W_TIMEOUT_S, mode="tower")
         else:                                                   # no tower: the same warning from our own timer
             self._warn()

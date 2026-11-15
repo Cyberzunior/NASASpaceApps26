@@ -132,6 +132,7 @@ class SimTower(threading.Thread):
         self.range_cm = 60.0
         self.last_fire = -99.0
         self.shots = self.jiggles = self.ups = 0
+        self.bearings = []                                    # the bearing of every F received
         self.pending = []
         self.rx = bytearray()
         self.sent = []
@@ -163,6 +164,7 @@ class SimTower(threading.Thread):
             elif k == "P":
                 self.out(P.encode("Q", m[1], m[2]))
             elif k == "F":
+                self.bearings.append(m[1] if len(m) > 1 else 0)
                 self._shot(now())
             elif k == "JIGGLE":
                 self.jiggles += 1

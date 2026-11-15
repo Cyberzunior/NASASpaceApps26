@@ -51,7 +51,7 @@ class Rec:
             return True
         return f
 
-    def fire(self, test=False):
+    def fire(self, test=False, bearing=0):
         self.sent.append(("fire",))
         return True
 
@@ -74,7 +74,7 @@ def test_protocol_letters_with_two_meanings_are_told_apart_by_field_count():
     assert P.decode("Z,2") == ("Z", 2) and P.decode("Z") == ("UP",)
     assert P.decode("R") == ("R",) and P.decode("R,57") == ("RANGE", 57.0)
     assert P.decode("C,-45") == ("C", -45) and P.decode("M,80,65,70,40") == ("M", 80, 65, 70, 40) and P.decode("V,118") == ("V", 118.0)
-    assert P.decode("F") == ("F",) and P.decode("garbage,,") is None
+    assert P.decode("F") == ("F",) and P.decode("F,-25") == ("F", -25) and P.decode("garbage,,") is None
     assert P.encode("D", 200, -200, 0) == "D,200,-200,0"
 
 
@@ -519,6 +519,7 @@ def test_devices_connect_report_lost_and_the_tower_warns_before_it_fires():
         tower.allow(True)
         for in_spot in (True, False):
             net.sim_tower.rover_in_spot = in_spot
+            C.TOWER_COOLDOWN_S = 0.3                                      # shortened here; the real rest is 22 s
             assert wait(lambda: tower.fire(), 4.0)
             evs = []
             assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "tower_k" for e in evs), 5.0)
@@ -684,14 +685,15 @@ def test_hud_sketch_matches_the_pin_table():
 def test_tower_sketch_is_the_uno_r3_laser_tower_and_speaks_the_suites_line_protocol():
     s = read("firmware", "tower", "tower.ino")
     code = re.sub(r"//.*", "", s)
-    assert "AccelStepper tilt(AccelStepper::HALF4WIRE, 4, 6, 5, 7)" in s
+    assert "AccelStepper yaw(AccelStepper::HALF4WIRE, 4, 6, 5, 7)" in s
     assert "BTN_PIN = 2, SERVO_PIN = 9, TRIG = 11, ECHO = 12, LASER = 13" in s and "digitalWrite(LASER, HIGH)" in s
     assert code.count("digitalWrite(LASER") == 1                               # on from power-up, never switched again
-    for line in ('F("I,tower,2")', 'F("W,3")', 'F("K,1")', 'F("K,0")', 'F("R,")', '"F")', '"J")', '"Z")', '"R")'):
+    for line in ('F("I,tower,2")', 'F("W,3")', 'F("K,1")', 'F("K,0")', 'F("R,")', '"Z")', '"R")'):
         assert line in code, line
-    assert "tilt.setCurrentPosition(TILT_DIR * UP_STEPS)" in code and code.count("tiltTo(UP_STEPS)") >= 2
+    assert "yaw.setCurrentPosition(0)" in code and "pitch.write(PITCH_UP)" in code and "goIdle()" in code
+    assert "COOLDOWN_MS" in code and "cooling()" in code and "fireSequence(s[1] ? atoi(s + 2) : 0)" in code
     assert "service()" in code and "LED" not in code.replace("LASER", "")      # pings answered mid-sequence, no armed LED
-    assert "if (digitalRead(BTN_PIN) == LOW" in code and "fireSequence();" in code
+    assert "if (digitalRead(BTN_PIN) == LOW" in code and "fireSequence(0);" in code
 
 
 def test_robot_bridge_selftest():

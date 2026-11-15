@@ -109,7 +109,9 @@ SAMPLE_MINERAL_POWER = 10.0
 SAMPLE_SCORE = 100
 
 # ---- Asteroid strikes (the tower warns, then fires)
-STRIKE_FIRST_S = 20.0        # the first strike is this long after the run starts
+TOWER_HIT_BEARING_DEG = 8     # the tower only checks a hit within this bearing of straight ahead (firmware HIT_BEARING_DEG)
+ASTEROID_CONE_DEG = 40       # each impact lands at a bearing uniform in +-this of the rover heading, never behind it
+STRIKE_FIRST_S = 7.0         # the first strike is this long after the run starts
 STRIKE_WARN_S = 3.0
 STRIKE_RADIUS_M = 7.0       # marked spot radius at the start of the warning (shrinks toward the impact)
 STRIKE_HIT_M = 3.0          # the marked spot radius at impact
@@ -122,6 +124,7 @@ STRIKE_MAX_GAP_S = 60.0
 STRIKE_S_PER_DAY = 2.0        # real days between two observed impact flashes -> game seconds (clamped)
 STRIKE_K_TIMEOUT_S = 2.0      # tower said warn but K never came: resolve by the no-tower rule
 TOWER_MIN_FIRE_GAP_S = 2.0
+TOWER_COOLDOWN_S = 22.0       # the tower (laser, servo, stepper) rests this long after each K before it takes another F (firmware COOLDOWN_MS is 20 s)
 
 # ---- Radiation storms (NASA DONKI)
 STORM_GAP_MIN_S = 30.0

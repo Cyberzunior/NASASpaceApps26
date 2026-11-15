@@ -26,7 +26,7 @@ pause. The joystick on the HUD panel drives too, and its button (or X, or RB) is
 | Unit | Board | Link |
 |---|---|---|
 | HUD panel (LCD, OLED, four LEDs, buzzer, joystick) | UNO Q, `firmware/hud_panel/` | USB cable, COM port |
-| Asteroid tower (tilt stepper with a green laser, fixed HC-SR04, push servo) | UNO R3, `firmware/tower/` | USB cable, COM port |
+| Asteroid tower (yaw stepper and pitch servo aim a green laser, fixed HC-SR04) | UNO R3, `firmware/tower/` | USB cable, COM port |
 | Rover (2WD, two TT motors on one dual DRV8833) | UNO Q, `firmware/robot/` | Wi-Fi, `ip:port` (192.168.1.50:5005) |
 | Camera | Logitech C920 on the rover (USB), panned by a stepper | MJPEG over Wi-Fi, `camera_stream.py` |
 

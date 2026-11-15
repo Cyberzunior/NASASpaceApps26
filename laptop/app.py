@@ -451,7 +451,7 @@ class App:
         elif st == S.MENU:
             if a == "fire":                                            # Test shot from the menu: straight to the tower
                 ok = self.links["tower"].fire(test=True)
-                self.toast("Test shot sent to the tower" if ok else "Test shot: tower not connected (or fired within 2 s)", "warn")
+                self.toast("Test shot sent to the tower" if ok else "Test shot: tower not connected, or cooling down", "warn")
             else:
                 self.menu.handle(self, a)
         elif st == S.SETTINGS:

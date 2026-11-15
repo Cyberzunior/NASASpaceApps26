@@ -203,8 +203,9 @@ class RobotLink(Link):
 
 
 class TowerLink(Link):
-    """The asteroid tower (UNO R3) over USB serial. F runs one sequence: the tower finds the rover, swings the laser
-    down, answers W,3, and 3 s later K,1 (hit) or K,0 (miss). J jiggles the servo, Z swings the beam up, R asks for one
+    """The asteroid tower (UNO R3) over USB serial. F,bearing runs one sequence: the stepper yaws the laser to the bearing, the servo
+    pitches it down onto the floor, the tower answers W,3, and 3 s later K,1 (hit) or K,0 (miss; always K,0 at large bearings,
+    where the fixed sensor cannot check, so the game applies its own hit rule). Z sends the beam back up and yaw to 0, R asks for one
     distance reading (answered R,cm). The tower answers pings during a sequence, so it never shows as lost."""
     role = "tower"
 
@@ -225,14 +226,25 @@ class TowerLink(Link):
             self.send("Z")                 # emergency stop: beam back up
 
     def can_fire(self):
-        return self.connected and self.armed and self.allowed and now() - self.last_fire >= C.TOWER_MIN_FIRE_GAP_S
+        return self.connected and self.armed and self.allowed and not self.cooling()
 
-    def fire(self, test=False):
-        """Safety: only while playing (allowed) or as a test shot, and 2 s after the previous F."""
-        if not (self.connected and self.armed and (self.allowed or test)) or now() - self.last_fire < C.TOWER_MIN_FIRE_GAP_S:
+    def cooling(self):
+        """True while the tower rests: 2 s after any F, and TOWER_COOLDOWN_S after its last K."""
+        t = now()
+        return t - self.last_fire < C.TOWER_MIN_FIRE_GAP_S or t - self.last_k < C.TOWER_COOLDOWN_S
+
+    def cooldown_left(self):
+        t = now()
+        return max(0.0, C.TOWER_COOLDOWN_S - (t - self.last_k), C.TOWER_MIN_FIRE_GAP_S - (t - self.last_fire))
+
+    def fire(self, test=False, bearing=0):
+        """F,bearing: the tower yaws to the bearing (whole degrees, -40 left .. 40 right), pitches the beam down and warns.
+        Safety: only while playing (allowed) or as a test shot, and never while the tower cools down."""
+        if not (self.connected and self.armed and (self.allowed or test)) or self.cooling():
             return False
         self.last_fire = now()
-        return self.send("F")
+        b = int(round(max(-C.ASTEROID_CONE_DEG, min(C.ASTEROID_CONE_DEG, bearing))))
+        return self.send("F,%d" % b)
 
     def jiggle(self):
         return self.send("J")

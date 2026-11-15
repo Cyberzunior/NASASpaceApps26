@@ -11,16 +11,20 @@
 serial boards answer `I?` with `I,<role>,2`).
 
 ## HUD panel
-Libraries: LiquidCrystal, Adafruit SSD1306, Adafruit GFX. Lines in: `M,pwr,o2,food,shield`, `H,hearts`, `E,samples`,
-`Z,state`, `V,tempC` (lunar temperature, once a second), `P` (pickup: yellow LED 5 blinks in 1 s, chirp), `BZ`, `G`, `R`, `L,line1|line2`.
-Out: `J,x,y,sw` every 33 ms (joystick on A1 / A2, button on D6; x right, y forward, -100..100; centre calibrated at power-up, stick untouched).
-One passive buzzer on D7 via `tone()`. No `delay()`. If the stick moves the wrong way, set `JOY_INVERT_X` / `JOY_INVERT_Y` on the laptop.
+Libraries: LiquidCrystal, Adafruit SSD1306, Adafruit GFX, Adafruit NeoPixel. Lines in: `M,pwr,o2,food,shield`,
+`H,hearts,samples`, `V,tempC` (lunar temperature, once a second, also the keep-alive), `S,state` (0 normal, 1 cold,
+2 hot, 3 radiation storm, 4 asteroid incoming), `P` (pickup: yellow LED 5 blinks in 1 s, chirp), `B` (run starts), `G`.
+Out: `J,x,y,sw` every 33 ms (joystick on A1 / A2, button on D6; x right, y forward, -100..100; centre calibrated at
+power-up, stick untouched), `HELLO,HUD,1` once at boot, `HB` heartbeat once a second. No line for 3 s: `NO LINK`.
+One passive buzzer on D7 via `tone()`, one NeoPixel on D4. No `delay()`. If the stick moves the wrong way, set
+`JOY_INVERT_X` / `JOY_INVERT_Y` on the laptop.
 
 ## Tower (UNO R3)
 Libraries: Servo, AccelStepper. The laser (D13 through a 2N2222) is on from power-up and never blinks; idle = beam straight up.
-`F` or the test button on D2: measure the rover (HC-SR04, median of 5), swing the beam down onto the floor `LEAD_CM` ahead of it, `W,3`,
-3 s countdown, measure again, `K,1` (rover still in the spot: hit, the servo jiggles) or `K,0` (it left, or no rover was found), beam back up.
-`J` jiggles the servo, `Z` swings the beam up, `R` answers `R,cm`. The sketch is line framed like every other board (`I?`, `P,seq,us`)
+`F,bearing` or the test button on D2 (bearing 0): measure the target (HC-SR04, median of 5), yaw the stepper to the bearing (-40..40),
+pitch the servo so the beam lands `LEAD_CM` ahead of the target (`DEFAULT_CM` if nothing is in range), `W,3`, 3 s countdown, then `K,1`
+(something in the spot) or `K,0` (nothing there, or the bearing is beyond `HIT_BEARING_DEG`, where the fixed sensor cannot check), beam back up.
+`Z` goes idle (pitch up, yaw 0), `R` answers `R,cm`. The sketch is line framed like every other board (`I?`, `P,seq,us`)
 and keeps answering pings during a sequence, so the laptop's status dot stays green. **Power it up, and connect the laptop, with the beam
 straight up:** the sketch counts steps from there and an UNO R3 resets when its serial port opens.
 Measure `LASER_H_CM`; tune `LEAD_CM`, `HIT_TOL_CM`, `TILT_DIR` and `AHEAD_DEFAULT` on the real track.
@@ -35,6 +39,6 @@ Test the bridge without a board: `python firmware/robot/linux_bridge/robot_bridg
 ## Verify on day one (not checked against a real board)
 1. D5, D6, D9, D10 give PWM, and `analogWrite()` works without `pinMode()` on them (forum reports: `pinMode()` can break it; PWM on one pin can disable other GPIO).
 2. `tone()` works on the UNO Q core (HUD buzzer on D7). `analogReadResolution(10)` exists on the core. The LCD1602 works from the UNO Q's supply at 3.3 V logic.
-3. The HUD panel appears as a USB serial port and answers `I?` (the sketch uses `Serial`); the Arduino Bridge API names for the rover come from community write-ups.
-4. Tower: the beam swings DOWN on `F` (else flip `TILT_DIR`), `R` gives sane centimetres, and the spot lands just ahead of the rover.
+3. The HUD panel appears as a USB serial port and sends `HELLO,HUD,1` at boot (the sketch uses `Serial`); the Arduino Bridge API names for the rover come from community write-ups.
+4. Tower: the beam swings DOWN on `F` (else flip `PITCH_DIR`; `YAW_DIR` if bearings swing the wrong way), `R` gives sane centimetres, and the spot lands just ahead of the rover.
 5. Wi-Fi power saving on the rover: the bridge tries `iw dev wlan0 set power_save off`; check the interface name.

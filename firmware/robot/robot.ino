@@ -1,23 +1,23 @@
-// T-Minus_6 rover, firmware v2. Arduino UNO Q, microcontroller (STM32) side. 3.3 V pins. 2WD.
+// T-Minus_6 rover, firmware v2. Arduino UNO Q, STM32 (microcontroller) side ONLY: no Linux program, no Arduino Bridge.
+// The game runs on the laptop and talks to this sketch over the USB serial port, 115200 baud, newline-framed ASCII lines
+// (laptop/devio/protocol.py). The laptop finds the board by asking I? and getting I,robot,2.
 //
-// Two TT gear motors (one left, one right, plus a caster or skid) on ONE dual DRV8833 board: channel 1 (IN1, IN2) drives the
-// left motor, channel 2 (IN3, IN4) the right. Per motor: PWM on the first input for forward, on the second for reverse,
-// both low = coast. SLP goes to 3V3 (or leave it unwired if the J1 jumper on the board is closed).
-// Power: an MB102 module set to 5 V feeds the DRV8833 VCC (motor supply) and the ULN2003 +. The MB102 gives about 700 mA,
-// so motor commands change by at most SLEW counts every 20 ms, and the laptop scales every command to MAX_PWM (config.py, 200).
-// Camera pan: 28BYJ-48 on a ULN2003 (AccelStepper, never blocks) turns the C920. C,angle sets the target, +-90 degrees.
+//   in : I?   P,seq,us   D,left,right,ap   C,angle   X (game-over latch)   R (release)
+//   out: HELLO,robot,2 (boot)   I,robot,2   Q,seq,us   B,L / B,R (bumpers)
 //
-// Talks to the Linux side through the Arduino Bridge: linux_bridge/robot_bridge.py calls "line" with one protocol line and
-// this sketch answers with Bridge.notify("mcu_line", line). Protocol: laptop/devio/protocol.py.
-//   in : D,left,right,ap   C,angle   X (game-over latch)   R (release)        out: B,L / B,R (bumpers)
+// Hardware (3.3 V logic): ONE dual DRV8833 board, 2WD. Channel 1 (IN1 D5, IN2 D6) = left motor, channel 2 (IN3 D9, IN4 D10) = right.
+// Per motor: PWM on the first input = forward, PWM on the second = reverse, both low = coast. EEP / SLP is left floating (the
+// board's own pull-up keeps it awake; if the motors stay dead, wire EEP to 3V3). An MB102 module at 5 V feeds the DRV8833 VCC and the
+// ULN2003 +, about 700 mA, so every command is limited to MAX_CMD (the laptop's MAX_PWM) and changes by at most SLEW counts per 20 ms.
+// Camera pan: 28BYJ-48 on a ULN2003 (D4 D7 D8 D12), AccelStepper, never blocks. C,angle sets the target, +-90 degrees, 0 = power-up.
 //
-// UNTESTED on hardware. Check before the demo:
-//  * D5, D6, D9, D10 give PWM. Third-party pinouts list PWM on D3 D5 D6 D9 D10 D11; forum posts report that calling pinMode() on a
-//    PWM pin can stop analogWrite() on the UNO Q core, and that enabling PWM on one pin can disable other GPIO. So this sketch
-//    never calls pinMode() on the four motor pins. If a wheel does not turn, or the stepper on D8 / D7 / D12 misbehaves once PWM is on,
-//    move the motor inputs to other PWM pins and update docs/pin_map.md.
-//  * Bridge.provide_safe / notify behave as in the current Arduino docs.
-#include <Arduino_RouterBridge.h>
+// How the rover mimics the game: the laptop mixes the stick into left / right wheel values (core/model.py, the same numbers that
+// move the craft on screen), scales them to +-MAX_PWM and sends D,left,right,ap every 20 ms. This sketch only has to drive the wheels
+// with those numbers and stop when they stop coming.
+//
+// UNTESTED on hardware. The motor pins never get pinMode(): analogWrite() sets a PWM pin up itself, and the UNO Q core applies the
+// pin mux per pin, so PWM on D5 / D6 does not take D12 / D8 (stepper) away. If a wheel runs backwards, flip INVERT_LEFT / INVERT_RIGHT
+// in laptop/config.py (not here).
 #include <AccelStepper.h>
 #define FW_VERSION 2
 
@@ -27,6 +27,8 @@ const int BUMP_L = A2, BUMP_R = A3, LED = 13;               // A0 and A1 are fre
 const unsigned long CMD_TIMEOUT = 300;     // ms without D: stop (stopAll)
 const unsigned long LINK_LOST = 2000;      // ms without any D: park the camera, blink the LED slowly
 const float PAN_LIMIT = 90.0;              // degrees each side: the USB cable must not wind up
+const int MAX_CMD = 200;                   // the laptop's MAX_PWM: the largest |value| a D line carries (and the most we ever output)
+const int MIN_PWM = 60;                    // TT motors do not turn below this duty: any non-zero command is lifted to it (0 = off). Tune on the floor
 const int SLEW = 40;                       // PWM counts a motor command may change per SLEW_MS (MB102 current limit)
 const unsigned long SLEW_MS = 20;
 
@@ -38,23 +40,13 @@ int outL = 0, outR = 0;                    // what the motors get: cmd, rate lim
 bool ap = false, latched = false, linkLost = false;
 unsigned long tCmd = 0, tBumpL = 0, tBumpR = 0, tSlew = 0;
 
-// ---- lines from Linux (set variables only; loop() acts on them)
-volatile bool pendingD = false, pendingC = false, pendingX = false, pendingR = false;
-volatile int newL = 0, newR = 0, newAp = 0, newPan = 0;
-
-void onLine(String s) {                    // runs between two passes of loop() (provide_safe)
-  if (s.startsWith("D,")) {
-    int a = s.indexOf(',', 2), b = s.indexOf(',', a + 1);
-    if (a > 0 && b > 0) { newL = s.substring(2, a).toInt(); newR = s.substring(a + 1, b).toInt(); newAp = s.substring(b + 1).toInt(); pendingD = true; }
-  } else if (s.startsWith("C,")) { newPan = s.substring(2).toInt(); pendingC = true; }
-  else if (s == "X") pendingX = true;
-  else if (s == "R") pendingR = true;
-}
-void send(const String& s) { Bridge.notify("mcu_line", s); }
-
-// ---- motors: v from -255 to 255
+// ---- motors: v from -MAX_CMD to MAX_CMD
 void drive(int in1, int in2, int v) {
-  v = constrain(v, -255, 255);
+  v = constrain(v, -MAX_CMD, MAX_CMD);
+  if (v != 0 && MIN_PWM > 0) {             // 1..MAX_CMD -> MIN_PWM..MAX_CMD, so a gentle stick still moves the wheels
+    int m = MIN_PWM + (int)((long)(abs(v) - 1) * (MAX_CMD - MIN_PWM) / (MAX_CMD - 1));
+    v = v > 0 ? m : -m;
+  }
   if (v >= 0) { analogWrite(in1, v);  analogWrite(in2, 0); }
   else        { analogWrite(in1, 0);  analogWrite(in2, -v); }
 }
@@ -69,24 +61,48 @@ int ramp(int out, int want) {              // move out toward want by at most SL
   return want;
 }
 
+// ---- one protocol line from the laptop (never blocks)
+void onLine(String s) {
+  unsigned long now = millis();
+  if (s == "I?") { Serial.println("I,robot,2"); return; }
+  if (s.startsWith("P,")) { Serial.print("Q"); Serial.println(s.substring(1)); return; }      // P,seq,us -> Q,seq,us
+  if (s.startsWith("D,")) {
+    int a = s.indexOf(',', 2), b = s.indexOf(',', a + 1);
+    if (a > 0 && b > 0) {
+      tCmd = now;
+      if (!latched) { cmdL = s.substring(2, a).toInt(); cmdR = s.substring(a + 1, b).toInt(); ap = s.substring(b + 1).toInt() != 0; }
+    }
+  } else if (s.startsWith("C,")) {
+    pan.moveTo((long)(constrain((float)s.substring(2).toInt(), -PAN_LIMIT, PAN_LIMIT) * STEPS_PER_DEG));
+  } else if (s == "X") { latched = true; cmdL = cmdR = 0; stopAll(); }
+  else if (s == "R") { latched = false; cmdL = cmdR = 0; }
+}
+
+String rx;                                 // line being assembled
+void serialService() {
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') { rx.trim(); if (rx.length()) onLine(rx); rx = ""; }
+    else if (rx.length() < 64) rx += c;
+    else rx = "";                          // longer than any valid line: drop it
+  }
+}
+
 void setup() {
   stopAll();                               // no pinMode() on the PWM pins: analogWrite() sets them up
   pinMode(BUMP_L, INPUT_PULLUP); pinMode(BUMP_R, INPUT_PULLUP); pinMode(LED, OUTPUT);
   pan.setMaxSpeed(700); pan.setAcceleration(1500);
   pan.setCurrentPosition(0);               // the camera faces straight ahead at power-up: that is zero
-  Bridge.begin();
-  Bridge.provide_safe("line", onLine);
+  Serial.begin(115200);
+  Serial.println("HELLO,robot,2");
   tCmd = millis();
 }
 
 void loop() {
   unsigned long now = millis();
-  if (pendingD) { pendingD = false; if (!latched) { cmdL = newL; cmdR = newR; ap = newAp; } tCmd = now; }
-  if (pendingC) { pendingC = false; pan.moveTo((long)(constrain((float)newPan, -PAN_LIMIT, PAN_LIMIT) * STEPS_PER_DEG)); }
-  if (pendingX) { pendingX = false; latched = true; cmdL = cmdR = 0; stopAll(); }
-  if (pendingR) { pendingR = false; latched = false; cmdL = cmdR = 0; }
+  serialService();
 
-  if (now - tCmd > CMD_TIMEOUT) cmdL = cmdR = 0;                   // laptop or Wi-Fi gone: stop within 300 ms
+  if (now - tCmd > CMD_TIMEOUT) cmdL = cmdR = 0;                   // laptop gone: stop within 300 ms
   linkLost = (now - tCmd > LINK_LOST);
   if (linkLost) pan.moveTo(0);                                     // park the camera so the cable cannot wind up
   if (latched || (cmdL == 0 && cmdR == 0)) stopAll();              // game over and every stop go through stopAll()
@@ -97,8 +113,8 @@ void loop() {
   }
   pan.run();                                                       // never waits for the stepper
 
-  if (digitalRead(BUMP_L) == LOW && now - tBumpL > 200) { tBumpL = now; send("B,L"); }
-  if (digitalRead(BUMP_R) == LOW && now - tBumpR > 200) { tBumpR = now; send("B,R"); }
+  if (digitalRead(BUMP_L) == LOW && now - tBumpL > 200) { tBumpL = now; Serial.println("B,L"); }
+  if (digitalRead(BUMP_R) == LOW && now - tBumpR > 200) { tBumpR = now; Serial.println("B,R"); }
   // status LED: steady = auto-pilot on, fast blink = game over, slow blink = link lost
   if (latched)       digitalWrite(LED, (now / 100) % 2);
   else if (linkLost) digitalWrite(LED, (now / 500) % 2);

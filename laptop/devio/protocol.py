@@ -10,7 +10,7 @@ Some letters mean two things depending on how many fields follow (the decoder te
   Z,state   thermal state (laptop -> HUD panel)         Z   swing the beam back up (laptop -> tower)
   R,cm      one distance reading (tower -> laptop)      R   release / reset (rover, HUD panel) or "send one reading" (tower)
 Laptop -> rover: D,left,right,ap   C,angle (camera pan, degrees, 0 = straight ahead)   X / R (stop latch / release)
-Laptop -> tower: F (run one asteroid sequence)   J   Z   R        tower -> laptop: W,3 then K,1 or K,0
+Laptop -> tower: F,bearing (run one asteroid sequence; bare F = bearing 0; -40..40 degrees, negative left)   J   Z   R        tower -> laptop: W,3 then K,1 or K,0
 Laptop -> HUD panel: M,power,oxygen,food,shield   H,hearts   E,samples   Z,state   V,tempC   L,line1|line2   BZ   P   G   R
 HUD panel -> laptop: J,x,y,sw every 33 ms (x right, y forward, -100..100, sw 1 while pressed)
 """
@@ -30,7 +30,7 @@ _SPEC = {
 # the same letter with another field count: (letter, fields) -> (kind, types)
 _ALT = {
     ("P", 0): ("PICKUP", ""), ("W", 1): ("WARN", "f"), ("K", 1): ("K", "i"), ("K", 0): ("K", ""),
-    ("J", 0): ("JIGGLE", ""), ("Z", 0): ("UP", ""), ("R", 1): ("RANGE", "f"),
+    ("F", 1): ("F", "i"), ("J", 0): ("JIGGLE", ""), ("Z", 0): ("UP", ""), ("R", 1): ("RANGE", "f"),
 }
 
 

@@ -8,14 +8,14 @@ The HUD panel and the rover are Arduino UNO Q: 3.3 V logic, never put 5 V on an 
 | A2 | Joystick VRy (forward and back) |
 | D6 | Joystick SW (button, `INPUT_PULLUP`, pressed reads LOW) |
 | D3 | Green LED (220 ohm): normal |
-| D4 | Blue LED (220 ohm): cold |
-| D5 | Red LED (220 ohm): hot (if fitted) |
+| D4 | ARGB NeoPixel data in (330 ohm, one pixel powered from 3V3): green normal, blue cold, red hot, purple storm, flashing orange asteroid, dim red game over |
+| D5 | Red LED (220 ohm): steady in cold, hot and radiation storm, fast blink for asteroid |
 | A0 | Yellow LED (220 ohm): sample picked up |
-| D7 | Passive buzzer + (driven with `tone()`: 2000 Hz hot, 400 Hz cold, 1200 Hz chirp on pickup) |
+| D7 | Passive buzzer + (driven with `tone()`: 2000 Hz hot, 400 Hz cold, 800 Hz storm, 1600 Hz asteroid, 300 Hz game over, 1200 Hz chirp) |
 | D8 / D9 | LCD RS / E |
 | D10 D11 D12 D13 | LCD D4 D5 D6 D7 |
 | SDA / SCL | I2C OLED SSD1306 at 0x3C, powered from 3V3 |
-| 3V3 | Joystick + and OLED VCC (keeps the analog outputs under 3.3 V) |
+| 3V3 | Joystick +, OLED VCC and the ARGB pixel + (keeps the analog outputs under 3.3 V) |
 
 D2 is not connected. The joystick sits in the big round hole of the front panel and drives the rover.
 
@@ -50,15 +50,15 @@ The Logitech C920 plugs into the rover's USB port (Linux side). `firmware/robot/
 | Pin | Goes to |
 |---|---|
 | D2 | Test button to GND (optional, `INPUT_PULLUP`): runs the same sequence as `F` |
-| D4 to D7 | ULN2003 IN1 to IN4: the 28BYJ-48 tilt stepper (AccelStepper `HALF4WIRE`, pin order 4, 6, 5, 7) |
-| D9 | Push servo signal: jiggles on a hit |
+| D4 to D7 | ULN2003 IN1 to IN4: the 28BYJ-48 YAW stepper: turns the laser left and right, 0 = straight ahead (AccelStepper `HALF4WIRE`, pin order 4, 6, 5, 7) |
+| D9 | Pitch servo signal: tilts the laser up and down (90 = level, up = straight up) |
 | D11 | HC-SR04 TRIG |
 | D12 | HC-SR04 ECHO |
 | D13 | Green laser through a 2N2222, held HIGH: D13 to the base through 220 ohm to 1 kohm, laser on the collector, emitter to GND. A laser wired straight to 5 V works too, and D13 is then unused |
 | 5 V | HC-SR04 VCC |
 
-The stepper's shaft is horizontal with the laser on an arm, so the beam tilts in a vertical plane. **Power the tower up with the beam
-pointing straight up** (the sketch counts steps from there), and connect the laptop while it is up: an UNO R3 resets when its serial
+The stepper yaws the laser and the servo pitches it. `F,bearing` (-40 to 40, negative left) yaws to the bearing and pitches the beam
+onto the floor. **Power the tower up with the beam pointing straight up and the stepper facing ahead** (the sketch counts from there), and connect the laptop while it is up: an UNO R3 resets when its serial
 port opens. The HC-SR04 is fixed, level, and faces the track; keep the rover alone on a clear track in front of it.
 Power: the servo, the stepper and the laser run from a second MB102 on 5 V (use its 3.3 V rail for the laser if the module is rated
 3 to 4.5 V). Its GND joins the UNO R3 GND; nothing else joins the two + rails.
