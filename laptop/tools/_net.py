@@ -11,7 +11,7 @@ import config as C  # noqa: E402
 from core.events import Bus  # noqa: E402
 from core.state import SharedState  # noqa: E402
 from devio.discovery import SerialScanner, UdpHub  # noqa: E402
-from devio.links import RobotLink, StationLink, TowerLink, link_thread  # noqa: E402
+from devio.links import RobotLink, HudLink, TowerLink, link_thread  # noqa: E402
 
 
 class Net:
@@ -19,17 +19,18 @@ class Net:
         self.log = log or (lambda m: None)
         self.state, self.bus = SharedState(), Bus()
         self.links = {"robot": RobotLink(self.state, self.bus, self.log), "tower": TowerLink(self.state, self.bus, self.log),
-                      "station": StationLink(self.state, self.bus, self.log)}
+                      "hud": HudLink(self.state, self.bus, self.log)}
         self.hub = UdpHub(self.links, self.log, port=hub_port)
-        self.scanner = SerialScanner(self.links, self.log, C.WEATHER_PORT, enabled=not sim)
+        self.scanner = SerialScanner(self.links, self.log, None, enabled=False)
         self.stop = threading.Event()
         self.sims = []
         if sim:
-            from devio.sim_devices import SimRobot, SimStation, SimTower
-            s = SimStation()
-            self.sims = [SimRobot(self.hub.port), SimTower(self.hub.port), s]
-            self.scanner.add_sim("SIM-STATION", s.port, "station")
-            self.sim_station = s
+            from devio.sim_devices import SimHud, SimRobot, SimTower
+            h, t = SimHud(), SimTower(warn_s=0.3)
+            self.sims = [SimRobot(self.hub.port), t, h]
+            self.scanner.add_sim("SIM-TOWER", t.port, "tower")
+            self.scanner.add_sim("SIM-HUD", h.port, "hud")
+            self.sim_hud, self.sim_tower = h, t
         for fn in (self.hub.run, self.scanner.run, lambda: link_thread(list(self.links.values()), self.stop, self.state)):
             threading.Thread(target=fn, daemon=True).start()
         for s in self.sims:

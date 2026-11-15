@@ -1,7 +1,7 @@
 """T-Minus_6: the game.   python main.py [--sim] [--windowed] [--debug]
 
   --sim              every device is a software one (no hardware needed). Mixed mode: --sim-robot --sim-tower
-                     --sim-station --sim-camera in any combination.
+                     --sim-hud --sim-camera in any combination.
   --windowed         start windowed even if FULLSCREEN is set in config.local.json
   --debug            FPS / thread / packet overlay (F4 toggles it) and log lines on the console
   --demo             scripted rehearsal: timed asteroids and hot / cold zones
@@ -20,7 +20,7 @@ os.chdir(HERE)
 def parse(argv=None):
     p = argparse.ArgumentParser(description="T-Minus_6 game")
     p.add_argument("--sim", action="store_true", help="simulate all devices")
-    for n in ("robot", "tower", "station", "camera"):
+    for n in ("robot", "tower", "hud", "camera"):
         p.add_argument("--sim-" + n, action="store_true", help="simulate the " + n)
     p.add_argument("--windowed", action="store_true")
     p.add_argument("--debug", action="store_true")

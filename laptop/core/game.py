@@ -1,16 +1,24 @@
-"""The rules of a run, with no drawing and no hardware code: it talks to the devices through three small link
-objects and reads the mixed command from the shared state. Runs headless in the tests."""
-import collections
+"""The rules of a run, with no drawing and no hardware code: four meters, base integrity (hearts), lunar samples,
+asteroid strikes warned by the tower, NASA radiation storms and a thermal state from the LRO Diviner range.
+Talks to the devices through three small link objects and reads the mixed command from the shared state.
+Runs headless in the tests."""
 import math
 import random
+
 import config as C
-from core import hazards as hz
-from core import spaceweather as sw
-from core import weather as wx
-from core.autopilot import Autopilot
-from core.calibration import aim_servo
-from core.lives import Lives
-from core.model import angdiff, in_arc, start_pose, step_pose
+from core import nasa as nasa_mod
+from core import thermal as th
+from core.model import angdiff, bearing_to, start_pose, step_pose
+
+METERS = ("power", "oxygen", "food", "shield")
+LABELS = {"power": "Power", "oxygen": "Oxygen", "food": "Food", "shield": "Shield"}
+KINDS = ("ice", "regolith", "mineral")
+WHY = {
+    "power": "Power runs the heaters, pumps and drives, and a lunar night lasts two weeks, so a base lives or dies by its power budget.",
+    "oxygen": "A crew has only minutes without breathable air, so a lunar base needs scrubbers and a steady supply such as mined ice.",
+    "food": "Packaged food runs out and resupply trips are slow and costly, so a lunar base has to grow part of its own food.",
+    "shield": "With no atmosphere or magnetic field, radiation storms and meteoroids hit the base directly, so shielding is life support.",
+}
 
 
 class NullLink:
@@ -28,301 +36,371 @@ class NullLink:
 
 
 class Game:
-    def __init__(self, state, robot=None, tower=None, station=None, log=None):
+    def __init__(self, state, robot=None, tower=None, hud=None, log=None, nasa=None):
         self.state = state
-        self.robot, self.tower, self.station = robot or NullLink(), tower or NullLink(), station or NullLink()
+        self.robot, self.tower, self.hud = robot or NullLink(), tower or NullLink(), hud or NullLink()
         self.log = log or (lambda msg: None)
-        self.field = hz.HazardField()
-        self.weather = wx.WeatherModel()
-        self.space = sw.SpaceWeather()           # NASA DONKI flares; the app calls space.refresh()
-        self.flare = None                        # the flare under the station's pot, None = no NASA data / no pot yet
-        self.pot_swing = 0.0                     # the swing the station reports using
-        self.autopilot = Autopilot()
-        self.lives = Lives()
-        self.fx, self.toasts = [], []            # drained by the renderer / HUD
+        self.nasa = nasa or nasa_mod.Nasa()
+        self.thermal = th.Thermal(self.nasa.diviner)
+        self.fx, self.toasts = [], []             # drained by the renderer / HUD
         self.practice = False
-        self.demo = False
+        self.intro_on = False
         self.reset()
 
     # ---- lifecycle
-    def reset(self, practice=False, demo=None):
-        """Back to the start mark with 15 lives. Unlatches the robot, re-arms the tower, resets the station."""
+    def reset(self, practice=False, intro=False):
+        """Back to the start with 15 hearts and full meters. Unlatches the rover, re-arms the tower, resets the HUD panel."""
         self.practice = practice
-        self.demo = C.DEMO_MODE if demo is None else demo
-        self.craft, self.ghost = start_pose(), start_pose()
-        self.lives = Lives(practice)
-        self.field.reset()
-        self.autopilot.reset()
-        zone_forced = None
-        self.weather.forced = zone_forced
-        self.weather.spike_until = -1.0
+        self.craft = start_pose()
+        self.m = {"power": C.START_POWER, "oxygen": C.START_OXYGEN, "food": C.START_FOOD, "shield": C.START_SHIELD}
+        self.hearts = C.LIVES
         self.t = 0.0
         self.over, self.over_t = False, 0.0
-        self.streak = self.best_streak = 0.0
-        self.dodged = 0
-        self.ap_time = 0.0
-        self.speed_cms = 0.0
-        self.next_asteroid_t = C.ASTEROID_GAP_S
-        self.demo_i = 0
-        self.tower_note = ""
-        self.radar, self.bump_t = {}, {}
-        self._history = collections.deque()      # (t, speed, turn) for the sync delay and the ghost
-        self._zone_sent = None
+        self.score = 0
+        self.samples = {k: 0 for k in KINDS}
+        self.strikes = 0
+        self.first_fail = None
+        self.speed_ms = 0.0
+        self.sample = None
+        self.sample_bad_t = 0.0
+        self.rest_until = -1.0
+        self.greenhouse = []                      # (t_due, food)
+        self.fact = ("", -1.0)                    # NASA Veggie line and when it stops showing
+        self.storm = None
+        self.storm_i = 0
+        self.next_storm_t = random.uniform(C.STORM_GAP_MIN_S, C.STORM_GAP_MAX_S)
+        self.strike = None
+        self.strike_i = random.randrange(len(self.nasa.impacts.events)) if self.nasa.impacts.ok else 0
+        self.next_strike_t = 20.0
+        self._acc = {"oxygen": 0.0, "food": 0.0, "power": 0.0}
+        self._starve = self._night = self._stormheart = 0.0
+        self._t_virtual = -9.0
+        self.fx.clear()
+        self.thermal.reset()
+        self.intro_on = bool(intro and not C.SKIP_INTRO)
+        self.intro_t = 0.0
         with self.state.lock:
             self.state.ap_on = False
             self.state.ap_cmd = (0.0, 0.0)
             self.state.turn_scale = 1.0
+            self.state.hold_commands = self.intro_on
         self.robot.latch(False)
         self.tower.set_armed(True)
-        self.station.reset()
-        self.station.set_lives(self.lives.lives)
-        self.log("run reset (%s)" % ("practice" if practice else "play"))
+        self.hud.reset()
+        self.hud.set_lives(self.hearts)
+        self.hud.set_samples(0)
+        self._send_meters()
+        if self.intro_on:
+            self.hud.text("OUTPOST ONLINE", "")
+        self.spawn_sample()
+        self.log("run reset%s" % (" (intro)" if self.intro_on else ""))
+
+    def skip_intro(self):
+        if self.intro_on:
+            self._end_intro()
+
+    def _end_intro(self):
+        self.intro_on = False
+        with self.state.lock:
+            self.state.hold_commands = False
+        self.hud.clear_text()
+        self.hud.chirp()
+        self.fx.append(("intro_end", 0, 0, ""))
 
     # ---- inputs
     def toggle_autopilot(self):
         with self.state.lock:
             self.state.ap_on = not self.state.ap_on
             on = self.state.ap_on
-        self.autopilot.reset()
         self.log("auto-pilot %s" % ("on" if on else "off"))
         return on
 
     def fire_test_asteroid(self):
-        """X in practice mode."""
-        if self.practice and not self.field.asteroids and not self.over:
-            return self._spawn(force=True)
+        """Ask the tower for one shot now (the same path as its test-fire button)."""
+        if not self.over and self.strike is None:
+            return self._request_strike()
         return False
 
-    def force_zone(self, zone):
-        """Rehearsal keys: H hot, K cold, N back to the real state."""
-        self.weather.forced = zone
-        self.log("zone forced: %s" % ("off" if zone is None else wx.NAMES[zone]))
+    def can_act(self):
+        return not self.over and not self.intro_on and self.m["power"] > 0 and self.t >= self.rest_until
+
+    def action(self, n):
+        """Keys 1..4. Each is a trade. Returns a short message for the toast."""
+        if self.over or self.intro_on:
+            return ""
+        if self.m["power"] <= 0:
+            return "POWER OFF: actions locked"
+        if self.t < self.rest_until:
+            return ""
+        m = self.m
+        if n == 1:
+            if m["power"] < C.SCRUBBER_POWER:
+                return "Not enough power"
+            m["power"] -= C.SCRUBBER_POWER
+            m["oxygen"] = min(100.0, m["oxygen"] + C.SCRUBBER_OXYGEN)
+            self.fx.append(("action", 0, 0, "scrubber"))
+            return "Scrubber: +%d oxygen" % C.SCRUBBER_OXYGEN
+        if n == 2:
+            cost = self.nasa.veggie.power
+            if m["power"] < cost:
+                return "Not enough power"
+            m["power"] -= cost
+            m["oxygen"] = max(0.0, m["oxygen"] - C.GREENHOUSE_OXYGEN)
+            self.greenhouse.append((self.t + self.nasa.veggie.delay_s, C.GREENHOUSE_FOOD))
+            if self.nasa.veggie.ok:
+                self.fact = (self.nasa.veggie.fact(), self.t + 8.0)
+            self.fx.append(("action", 0, 0, "greenhouse"))
+            return "Greenhouse planted: food in %.0f s" % self.nasa.veggie.delay_s
+        if n == 3:
+            if m["power"] < C.SHIELD_BOOST_POWER:
+                return "Not enough power"
+            m["power"] -= C.SHIELD_BOOST_POWER
+            m["shield"] = min(100.0, m["shield"] + C.SHIELD_BOOST_GAIN)
+            self.fx.append(("action", 0, 0, "shield"))
+            return "Shield boost: +%d shield" % C.SHIELD_BOOST_GAIN
+        if n == 4:
+            self.rest_until = self.t + C.REST_S
+            m["oxygen"] = min(100.0, m["oxygen"] + C.REST_OXYGEN)
+            m["food"] = min(100.0, m["food"] + C.REST_FOOD)
+            self.fx.append(("action", 0, 0, "rest"))
+            return "Crew resting for %.0f s" % C.REST_S
+        return ""
 
     def handle(self, ev):
         """One event from a device thread."""
         kind, d = ev.kind, ev.data
-        if kind == "scan":
-            self.robot_scan = d
-            self.radar[d[0]] = (d[1], self.wall)
-            self.field.add_scan(self.ghost, d[0], d[1], self.t)
-        elif kind == "bumper" and not self.over:
-            self.bump_t[d[0]] = self.wall
-            if C.DRIFT_CORRECTION > 0 and self.field.debris:      # the robot is touching something real
-                near = min(self.field.debris, key=lambda q: math.hypot(q.x - self.ghost.x, q.y - self.ghost.y))
-                dist = math.hypot(near.x - self.ghost.x, near.y - self.ghost.y)
-                if near.real and 0 < dist < 20:
-                    k = C.DRIFT_CORRECTION * (1 - (near.r + C.CRAFT_R) / dist)
-                    self.ghost.x += (near.x - self.ghost.x) * k
-                    self.ghost.y += (near.y - self.ghost.y) * k
-            self._hit("bumper", self.craft.x, self.craft.y)
-        elif kind == "tower_k":
-            for a in self.field.asteroids:
-                if a.state == hz.FIRED:
-                    a.state = hz.FLY
-        elif kind == "weather":
-            self.weather.on_station(d[0], d[1], d[2], self.wall)
-        elif kind == "pot":
-            self.pot_swing = d[1]
-            if C.SPACE_WEATHER and self.space.loaded():      # without NASA data the pot sets the swing alone
-                e = self.space.pick(d[0])
-                if e is not self.flare:
-                    self.log("pot %d: %s, swing %.1f C" % (d[0], self.space.label(e), e["swing"]))
-                self.flare = e
-                self.station.set_swing(e["swing"])
-        elif kind == "robot_air":
-            self.weather.on_robot_air(d[0], d[1], self.wall)
-        elif kind == "device_down" and d[0] == "station":
-            self.weather.station_lost()
+        if kind == "hud_temp":
+            self.thermal.on_reading(d[0], d[1], self.t_wall)
+        elif kind == "tower_warn" and not self.over and not self.intro_on:
+            if self.strike is not None and self.strike["phase"] == "await":
+                self.strike.update(phase="warn", left=float(d[0]), mode="tower")
+            elif self.strike is None:                       # the tower's own test-fire button: no date
+                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None}
+            else:
+                return
+            self.fx.append(("asteroid_warn", 0, 0, ""))
+            self.hud.text("ASTEROID", "INCOMING!")
+            self.log("asteroid warning from the tower: %.1f s" % d[0])
+        elif kind == "tower_k" and not self.over and not self.intro_on:
+            if self.strike is None or self.strike["phase"] == "warn":
+                self._resolve_strike()
+
+    t_wall = 0.0
 
     # ---- helpers
-    def _hit(self, kind, x, y):
-        if not self.lives.hit(kind, self.t):
-            return False
-        self.streak = 0.0
-        self.fx.append(("hit", x, y, kind))
-        self.station.set_lives(self.lives.lives)
-        self.log("HIT by %s, %d lives left" % (kind, self.lives.lives))
-        if self.lives.dead:
+    def spawn_sample(self):
+        """One sample at a time, never behind the rover: bearing uniform in +-SAMPLE_CONE_DEG from the heading right now."""
+        c = self.craft
+        bearing = random.uniform(-C.SAMPLE_CONE_DEG, C.SAMPLE_CONE_DEG)
+        dist = random.uniform(C.SAMPLE_MIN_M, C.SAMPLE_MAX_M)
+        a = math.radians(c.theta + bearing)
+        self.sample = {"x": c.x + dist * math.cos(a), "y": c.y + dist * math.sin(a), "kind": random.choice(KINDS), "age": 0.0}
+        self.sample_bad_t = 0.0
+
+    def sample_bearing(self):
+        s = self.sample
+        return bearing_to(self.craft, s["x"], s["y"]) if s else 0.0
+
+    def sample_distance(self):
+        s = self.sample
+        return math.hypot(s["x"] - self.craft.x, s["y"] - self.craft.y) if s else 0.0
+
+    def _collect(self):
+        s = self.sample
+        k = s["kind"]
+        self.samples[k] += 1
+        self.score += C.SAMPLE_SCORE
+        if k == "ice":
+            self.m["oxygen"] = min(100.0, self.m["oxygen"] + C.SAMPLE_ICE_OXYGEN)
+        elif k == "regolith":
+            self.m["shield"] = min(100.0, self.m["shield"] + C.SAMPLE_REGOLITH_SHIELD)
+        else:
+            self.m["power"] = min(100.0, self.m["power"] + C.SAMPLE_MINERAL_POWER)
+        self.hud.pickup()
+        self.hud.set_samples(sum(self.samples.values()))
+        self.fx.append(("pickup", s["x"], s["y"], k))
+        self.log("sample collected: %s" % k)
+        self.spawn_sample()
+
+    def _lose_heart(self, why):
+        if self.over:
+            return
+        self.hearts -= 1
+        self.fx.append(("heart", 0, 0, why))
+        self.hud.set_lives(self.hearts)
+        self.log("heart lost (%s), %d left" % (why, self.hearts))
+        if self.hearts <= 0:
+            self.hearts = 0
             self.over, self.over_t = True, self.t
             self.robot.latch(True)
             self.tower.set_armed(False)
-            self.station.game_over()
-            self.fx.append(("gameover", x, y, kind))
-            self.log("GAME OVER at T+%.0f s" % self.t)
+            self.hud.game_over()
+            self.fx.append(("gameover", 0, 0, self.first_fail or ""))
+            self.log("GAME OVER at T+%.0f s (first failure: %s)" % (self.t, self.first_fail))
+
+    def _request_strike(self):
+        date = None
+        imp = self.nasa.impacts
+        if imp.ok:
+            date = imp.events[self.strike_i % len(imp.events)]["date"]
+        if self.tower.connected and self.tower.fire():
+            self.strike = {"phase": "await", "left": 1.5, "mode": "tower", "date": date}
+        else:                                                   # no tower: the same warning from our own timer
+            self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date}
+            self.fx.append(("asteroid_warn", 0, 0, ""))
+            self.hud.text("ASTEROID", "INCOMING!")
         return True
 
-    def _spawn(self, force=False):
-        speed, turn = self.state.cmd[0], self.state.cmd[1]
-        a = self.field.plan_asteroid(self.craft, speed, turn, force)
-        if a is None:
-            return False
-        if C.TOWER_HAS_PAN:
-            self.tower.aim(aim_servo(a.bearing()))
-        self.fx.append(("asteroid_warn", a.x0, a.y0, ""))
-        self.log("asteroid incoming")
-        return True
-
-    def _collide(self, pose):
-        """Keep a body on the board and out of Earth and debris. Returns the debris piece it touched, if any."""
-        cr = C.CRAFT_R
-        pose.x = max(-C.BOARD_W / 2 + cr, min(C.BOARD_W / 2 - cr, pose.x))
-        pose.y = max(-C.BOARD_H / 2 + cr, min(C.BOARD_H / 2 - cr, pose.y))
-        touched = None
-        for ox, oy, r, piece in [(0.0, 0.0, C.EARTH_R, None)] + [(d.x, d.y, d.r, d) for d in self.field.debris]:
-            dist = math.hypot(pose.x - ox, pose.y - oy)
-            if dist < r + cr:
-                k = (r + cr) / (dist or 1.0)
-                pose.x, pose.y = ox + (pose.x - ox) * k, oy + (pose.y - oy) * k
-                touched = piece or touched
-        return touched
-
-    def _delayed(self, delay):
-        """The command from `delay` seconds ago."""
-        want = self.t - delay
-        best = self._history[0] if self._history else (0.0, 0.0, 0.0)
-        for item in self._history:
-            if item[0] <= want:
-                best = item
-            else:
-                break
-        return best[1], best[2]
-
-    def zone_of(self, pose):
-        a = pose.angle()
-        return wx.HOT if in_arc(a, C.HOT_ZONE) else wx.COLD if in_arc(a, C.COLD_ZONE) else wx.NORMAL
+    def _resolve_strike(self):
+        self.strike = None
+        self.strikes += 1
+        m = self.m
+        if m["shield"] > 0:
+            m["shield"] = max(0.0, m["shield"] - C.STRIKE_SHIELD)
+        else:
+            self._lose_heart("strike")
+            k = random.choice(METERS)
+            m[k] = max(0.0, m[k] - C.STRIKE_METER_DROP)
+        self.fx.append(("hit", 0, 0, ""))
+        self.hud.clear_text()
+        self.log("asteroid strike resolved")
 
     # ---- one frame
-    wall = 0.0
-    robot_scan = None
-
     def step(self, dt, wall=None):
-        """Advance the run by dt seconds. `wall` is the real clock, used for weather history."""
-        self.wall = self.t if wall is None else wall
+        """Advance the run by dt seconds."""
+        self.t_wall = self.t if wall is None else wall
         st = self.state
         if self.over:
-            self._weather()
             return
+        if self.intro_on:                                       # the cutscene: nothing drains, nothing drives
+            self.intro_t += dt
+            st.drive_enabled = False
+            if self.intro_t >= C.INTRO_S:
+                self._end_intro()
+            return
+        m = self.m
+        resting = self.t < self.rest_until
+        powered = m["power"] > 0
+
+        # movement: the same speed and turn the rover is sent
         speed, turn = st.cmd[0], st.cmd[1]
-        self._history.append((self.t, speed, turn))
-        while len(self._history) > 2 and self._history[1][0] < self.t - 1.0:
-            self._history.popleft()
+        st.drive_enabled = powered and not resting
+        if st.drive_enabled:
+            step_pose(self.craft, speed, turn, dt)
+        self.speed_ms = speed * C.V_MAX * C.METERS_PER_CM if st.drive_enabled else 0.0
+        driving = st.drive_enabled and abs(speed) > 0.05
 
-        # craft: the mixed command, optionally delayed so the screen matches the robot
-        cs, ct = self._delayed(C.SYNC_DELAY_MS / 1000.0) if C.SYNC_DELAY_MS > 0 else (speed, turn)
-        step_pose(self.craft, cs, ct, dt)
-        self.speed_cms = cs * C.V_MAX
-        piece = self._collide(self.craft)
-        if piece is not None:
-            piece.hit_t = self.t
-            self._hit("debris", self.craft.x, self.craft.y)
+        # thermal state and the day clock
+        hud_up = bool(getattr(self.hud, "connected", False))
+        self.thermal.update(dt, self.t_wall, hud_up)
+        self.hud.set_zone(self.thermal.state)
+        if hud_up and self.thermal.source == "SIM" and self.t - self._t_virtual >= 2.0:
+            self._t_virtual = self.t
+            self.hud.virtual_temp(self.thermal.virtual_sensor_c())      # dead sensor: feed it the simulation
+        thermal_x = 2.0 if self.thermal.state != th.NORMAL else 1.0
 
-        # robot ghost: the same commands, as late as the link makes them; stopped when the robot is
-        if self.robot.connected:
-            gs, gt = self._delayed(self.robot.one_way_s())
-            if self.robot.front_stop and gs > 0:
-                gs = 0.0
-            step_pose(self.ghost, gs, gt, dt)
-            self._collide(self.ghost)
+        # meters
+        m["oxygen"] = max(0.0, m["oxygen"] - dt / C.OXYGEN_DRAIN_S)
+        m["food"] = max(0.0, m["food"] - dt / C.FOOD_DRAIN_S)
+        if not driving and self.thermal.daylight():
+            m["power"] = min(100.0, m["power"] + dt / C.POWER_RECHARGE_S)
+        else:
+            m["power"] = max(0.0, m["power"] - dt * thermal_x / (C.POWER_DRAIN_DRIVE_S if driving else C.POWER_DRAIN_REST_S))
+        for due, food in [g for g in self.greenhouse if g[0] <= self.t]:
+            self.greenhouse.remove((due, food))
+            m["food"] = min(100.0, m["food"] + food)
+            self.fx.append(("harvest", 0, 0, ""))
+            self.toasts.append(("Greenhouse harvest: +%d food" % food, "ok"))
 
-        self.field.tick(dt, self.t)
-        self._asteroids(dt)
-        self._dodges()
-        self._weather()
+        # samples
+        if self.sample:
+            self.sample["age"] += dt
+            if self.sample_distance() < C.SAMPLE_PICKUP_M:
+                self._collect()
+            elif abs(self.sample_bearing()) > C.SAMPLE_BEHIND_DEG:
+                self.sample_bad_t += dt
+                if self.sample_bad_t >= C.SAMPLE_BEHIND_S:
+                    self.spawn_sample()
+            else:
+                self.sample_bad_t = 0.0
 
-        if st.ap_on:
-            st.ap_cmd = self.autopilot.decide(self.craft, self.field, st.stick[0], st.stick[1], dt)
-        self.lives.tick(dt)
+        # radiation storms (NASA DONKI events, one every 30 to 45 s)
+        if self.storm is None and self.t >= self.next_storm_t:
+            ev = self.nasa.storms.events[self.storm_i % len(self.nasa.storms.events)] if self.nasa.storms.ok else None
+            self.storm_i += 1
+            self.storm = {"label": ev["label"] if ev else "RADIATION STORM", "date": ev["date"] if ev else None,
+                          "left": ev["dur"] if ev else C.STORM_DUR_DEFAULT, "nasa": bool(ev)}
+            self.fx.append(("storm", 0, 0, self.storm["label"]))
+            self.log("radiation storm: %s" % self.storm)
+        if self.storm:
+            m["shield"] = max(0.0, m["shield"] - dt * C.STORM_SHIELD_DRAIN_S)
+            if m["shield"] <= 0:
+                self._stormheart += dt
+                if self._stormheart >= C.STORM_HEART_S:
+                    self._stormheart = 0.0
+                    self._lose_heart("storm")
+            self.storm["left"] -= dt
+            if self.storm["left"] <= 0:
+                self.storm = None
+                self._stormheart = 0.0
+                self.next_storm_t = self.t + random.uniform(C.STORM_GAP_MIN_S, C.STORM_GAP_MAX_S)
+
+        # asteroid strikes
+        if self.strike is None and self.t >= self.next_strike_t and not self.practice:
+            self._request_strike()
+        s = self.strike
+        if s:
+            s["left"] -= dt
+            if s["phase"] == "await" and s["left"] <= 0:       # the tower did not answer: warn from our own timer
+                s.update(phase="warn", left=C.STRIKE_WARN_S, mode="own")
+                self.fx.append(("asteroid_warn", 0, 0, ""))
+                self.hud.text("ASTEROID", "INCOMING!")
+            elif s["phase"] == "warn" and s["mode"] == "own" and s["left"] <= 0:
+                self._resolve_strike()
+            elif s["phase"] == "warn" and s["mode"] == "tower" and s["left"] <= -C.STRIKE_K_TIMEOUT_S:
+                self._resolve_strike()
+            if self.strike is None:
+                imp = self.nasa.impacts
+                self.strike_i += 1
+                gap = imp.gap_s(self.strike_i) if imp.ok else random.uniform(C.STRIKE_MIN_GAP_S, C.STRIKE_MAX_GAP_S)
+                self.next_strike_t = self.t + gap
+
+        # first meter to fail, and the hearts it costs
+        for k in METERS:
+            if m[k] <= 0 and self.first_fail is None:
+                self.first_fail = k
+                self.log("first failure: %s" % k)
+        if m["oxygen"] <= 0 or m["food"] <= 0:
+            self._starve += dt
+            if self._starve >= C.HEART_LOSS_S:
+                self._starve = 0.0
+                self._lose_heart("life support")
+        else:
+            self._starve = 0.0
+        if m["power"] <= 0 and not self.thermal.daylight():     # no power at night: no heat, nothing recharges
+            self._night += dt
+            if self._night >= C.HEART_LOSS_S:
+                self._night = 0.0
+                self._lose_heart("no power at night")
+        else:
+            self._night = 0.0
+
+        # auto-pilot: steer toward the sample
+        if st.ap_on and self.sample:
+            st.ap_cmd = (0.7, max(-1.0, min(1.0, self.sample_bearing() / 40.0)))
+
+        self._send_meters()
         self.t += dt
-        if st.ap_on:
-            self.ap_time += dt
-        if not self.lives.protected():
-            self.streak += dt
-            self.best_streak = max(self.best_streak, self.streak)
+
+    def _send_meters(self):
+        self.hud.set_meters(*[self.m[k] for k in METERS])
 
     def idle(self, dt, wall):
-        """Menus, pause, hardware check: the weather (real sensor, zones, demo keys) keeps working, nothing else moves."""
-        self.wall = wall
-        self._weather()
-        self.field.tick(dt, self.t)
-
-    def _weather(self):
-        w = self.weather
-        w.set_zone(self.zone_of(self.craft) if not self.over else wx.NORMAL)
-        for ev in w.update(self.wall):
-            if ev[0] == "state":
-                if ev[2] == wx.NORMAL:
-                    self.toasts.append(("Temperature back to normal", "ok"))
-                self.fx.append(("weather", 0, 0, wx.NAMES[ev[2]]))
-                self.log("weather %s -> %s" % (wx.NAMES[ev[1]], wx.NAMES[ev[2]]))
-            elif ev[0] == "spike":
-                self.fx.append(("spike", 0, 0, ""))
-                self.log("temperature spike %.1f C in %d s" % (ev[1], C.SPIKE_WINDOW_S))
-        self.station.set_zone(w.game_zone() if not self.over else wx.NORMAL)
-        penalty = C.WEATHER_TURN_PENALTY if w.state != wx.NORMAL else 0.0
-        self.state.turn_scale = 1.0 - penalty
-
-    def _asteroids(self, dt):
-        self.tower.allow(not self.over)
-        for a in self.field.asteroids[:]:
-            a.age += dt
-            a.rot = (a.rot + a.spin * dt) % 360.0
-            if a.state == hz.WARN:
-                a.timer -= dt
-                if a.timer <= 0:
-                    sent = self.tower.fire()
-                    if self.tower.connected and sent:
-                        a.state, a.timer = hz.FIRED, C.ASTEROID_K_TIMEOUT_S
-                        self.tower_note = ""
-                    else:                         # no tower: the screen asteroid flies alone
-                        a.state, a.offline = hz.FLY, True
-                        self.tower_note = "TOWER OFFLINE"
-                    self.fx.append(("asteroid_fire", a.x0, a.y0, ""))
-            elif a.state == hz.FIRED:
-                a.timer -= dt
-                if a.timer <= 0:
-                    a.state, a.offline = hz.FLY, True
-                    self.tower_note = "TOWER OFFLINE"
-            else:
-                a.dist += a.speed * dt
-                p = a.pos()
-                if p is None:
-                    self.field.asteroids.remove(a)
-                    self.dodged += 1
-                    end = (a.x0 + a.dx * a.max_dist, a.y0 + a.dy * a.max_dist)
-                    self.fx.append(("burn" if a.burns else "miss", end[0], end[1], ""))
-                    continue
-                in_lane = abs(math.hypot(*p) - C.ORBIT_R) <= C.LANE_WIDTH / 2
-                if in_lane and math.hypot(p[0] - self.craft.x, p[1] - self.craft.y) < C.ASTEROID_R + C.CRAFT_R:
-                    self.field.asteroids.remove(a)
-                    if not self._hit("asteroid", p[0], p[1]):
-                        self.fx.append(("miss", p[0], p[1], ""))
-        if self.over:
-            return
-        if self.demo:
-            while self.demo_i < len(C.DEMO_SCRIPT) and self.t >= C.DEMO_SCRIPT[self.demo_i][0]:
-                action = C.DEMO_SCRIPT[self.demo_i][1]
-                self.demo_i += 1
-                if action == "asteroid":
-                    if not self.field.asteroids:
-                        self._spawn(force=True)
-                elif action in ("hot", "cold", "normal"):
-                    self.force_zone({"hot": wx.HOT, "cold": wx.COLD, "normal": None}[action])
-        elif not self.practice and self.t >= self.next_asteroid_t and not self.field.asteroids:
-            if self._spawn():
-                self.next_asteroid_t = self.t + C.ASTEROID_GAP_S + random.uniform(0, C.ASTEROID_GAP_JITTER_S)
-
-    def _dodges(self):
-        """Passing a debris piece without touching it counts as one dodge."""
-        ang = self.craft.angle()
-        for d in self.field.debris:
-            rel = angdiff(ang, d.angle)
-            if d.rel is not None and d.rel * C.ORBIT_DIR < 0 <= rel * C.ORBIT_DIR and abs(rel) < 30 \
-                    and self.t - d.hit_t > 3:
-                self.dodged += 1
-                self.fx.append(("dodged", d.x, d.y, ""))
-            d.rel = rel
+        """Menus, pause, hardware check: nothing moves."""
+        self.t_wall = wall
 
     def results(self):
-        h = self.lives.hits
-        return {"time": self.t, "debris": h["debris"] + h["bumper"], "asteroid": h["asteroid"],
-                "dodged": self.dodged, "best_streak": self.best_streak}
+        ff = self.first_fail or ""
+        return {"time": self.t, "score": self.score, "samples": dict(self.samples), "strikes": self.strikes,
+                "first_fail": ff, "first_fail_label": LABELS.get(ff, "none"), "why": WHY.get(ff, ""),
+                "nasa": self.nasa.used()}

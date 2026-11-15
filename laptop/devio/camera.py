@@ -1,40 +1,28 @@
-"""Robot camera. One thread keeps ONLY the newest frame (MJPEG from an ESP32-CAM or a phone app, or the simulated
+"""Robot camera. One thread keeps ONLY the newest frame (the C920's MJPEG stream from the rover, or the simulated
 first-person view). It reconnects by itself, reports the frame age, and never touches the control link."""
-import socket
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 import config as C
 from core.clock import now
-
-
-def probe_port81(subnet_prefix, timeout=0.2):
-    """Looks for an ESP32-CAM (CameraWebServer streams on :81) in the /24 of the robot's address."""
-    def check(i):
-        ip = "%s.%d" % (subnet_prefix, i)
-        try:
-            with socket.create_connection((ip, 81), timeout=timeout):
-                return ip
-        except OSError:
-            return None
-    with ThreadPoolExecutor(64) as ex:
-        for ip in ex.map(check, range(1, 255)):
-            if ip:
-                return "http://%s:81/stream" % ip
-    return None
 
 
 class Camera(threading.Thread):
     def __init__(self, state, log, url=None, sim_source=None, robot_ip=lambda: None):
         super().__init__(daemon=True, name="camera")
         self.state, self.log = state, log
-        self.url, self.sim_source, self.robot_ip = url or C.CAMERA_URL, sim_source, robot_ip
+        self.url, self.sim_source, self.robot_ip = url if url is not None else C.CAMERA_URL, sim_source, robot_ip
         self.stop_flag = threading.Event()
         self.frame = None                  # numpy RGB (h, w, 3)
         self.stamp = 0.0
         self.fps = 0.0
         self.error = ""
         self.size = (0, 0)
+
+    def set_url(self, url):
+        """Connections bar: switch stream. The reader drops the old one at its next frame."""
+        self.url = url or ""
+        self.frame, self.stamp, self.error = None, 0.0, ""
+        self._mark()
 
     def age_ms(self):
         return (now() - self.stamp) * 1000.0 if self.frame is not None else None
@@ -69,29 +57,21 @@ class Camera(threading.Thread):
             while not self.stop_flag.wait(1.0):
                 self._mark()
             return
-        t_probe = -99.0
         while not self.stop_flag.is_set():
             if not self.url:
                 self._mark()
-                ip = self.robot_ip()
-                if ip and now() - t_probe > 10.0:
-                    t_probe = now()
-                    self.error = "looking for the camera"
-                    found = probe_port81(ip.rsplit(".", 1)[0])
-                    if found:
-                        self.url = found
-                        self.log("camera found at " + found)
-                self.stop_flag.wait(0.5)
+                self.stop_flag.wait(0.3)
                 continue
+            url = self.url
             cap = None
             try:
-                cap = cv2.VideoCapture(self.url)
+                cap = cv2.VideoCapture(url)
                 try:
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 except Exception:
                     pass
                 n, t0 = 0, now()
-                while not self.stop_flag.is_set() and cap.isOpened():
+                while not self.stop_flag.is_set() and cap.isOpened() and self.url == url:
                     ok, img = cap.read()
                     if not ok:
                         break
@@ -106,7 +86,7 @@ class Camera(threading.Thread):
             finally:
                 if cap is not None:
                     cap.release()
-            self.error = self.error or "no stream at %s" % self.url
+            self.error = self.error or ("no stream at %s" % url)
             self._mark()
             self.stop_flag.wait(1.0)             # stream dropped: try again
 

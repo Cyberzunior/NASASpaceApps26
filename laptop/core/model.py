@@ -9,11 +9,6 @@ def angdiff(a, b):
     return (a - b + 180.0) % 360.0 - 180.0
 
 
-def in_arc(angle, arc):
-    a0, a1 = arc
-    return (angle - a0) % 360.0 <= (a1 - a0) % 360.0
-
-
 def shape_axis(x, dead=None, expo=None):
     """Dead zone (rescaled so motion starts from zero) then an expo curve for fine control near the centre."""
     dead = C.DEAD_ZONE if dead is None else dead
@@ -42,6 +37,7 @@ def wheel_mix(speed, turn):
 
 
 class Pose:
+    """Position in metres on the lunar surface; theta in degrees, 0 = +x, increasing clockwise on the screen (y points down)."""
     __slots__ = ("x", "y", "theta")
 
     def __init__(self, x=0.0, y=0.0, theta=0.0):
@@ -50,35 +46,24 @@ class Pose:
     def copy(self):
         return Pose(self.x, self.y, self.theta)
 
-    def angle(self):
-        """Position angle around Earth, degrees 0..360."""
-        return math.degrees(math.atan2(self.y, self.x)) % 360.0
-
-    def radius(self):
-        return math.hypot(self.x, self.y)
-
     def __repr__(self):
         return "Pose(%.1f, %.1f, %.0f)" % (self.x, self.y, self.theta)
 
 
 def step_pose(pose, speed, turn, dt, turn_scale=1.0):
-    """Advance a pose in place. speed / turn are the mixed values from mix()."""
+    """Advance a pose in place. speed / turn are the mixed values from mix(): the same numbers the real rover gets."""
     pose.theta = (pose.theta + turn * C.W_MAX * turn_scale * dt) % 360.0
     a = math.radians(pose.theta)
-    pose.x += speed * C.V_MAX * math.cos(a) * dt
-    pose.y += speed * C.V_MAX * math.sin(a) * dt
+    d = speed * C.V_MAX * C.METERS_PER_CM * dt
+    pose.x += d * math.cos(a)
+    pose.y += d * math.sin(a)
     return pose
 
 
-def predict_pose(pose, speed, turn, t, step=0.05):
-    """Where the craft will be t seconds from now if the command stays the same."""
-    p = pose.copy()
-    n = max(1, int(t / step))
-    for _ in range(n):
-        step_pose(p, speed, turn, t / n)
-    return p
-
-
 def start_pose():
-    a = math.radians(C.START_ANGLE)
-    return Pose(C.ORBIT_R * math.cos(a), C.ORBIT_R * math.sin(a), (C.START_ANGLE + 90.0 * C.ORBIT_DIR) % 360.0)
+    return Pose(0.0, 0.0, 270.0)           # facing up the screen
+
+
+def bearing_to(pose, x, y):
+    """Signed angle in degrees from the rover's heading to a point: negative = left, 0 = ahead, positive = right."""
+    return angdiff(math.degrees(math.atan2(y - pose.y, x - pose.x)), pose.theta)

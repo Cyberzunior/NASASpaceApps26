@@ -4,7 +4,7 @@ UdpHub: one UDP socket on port 5005. UNO Q bridges broadcast HELLO,role,fw,ip on
 sender and attaches it to the robot or tower link. While a device is missing the hub broadcasts WHO? once a second.
 A manual ROBOT_ADDR / TOWER_ADDR in config.local.json is used as well (no discovery needed).
 
-SerialScanner: lists serial ports every 3 s, opens new ones, asks I? and expects I,weather,2 (or I,robot,2 /
+SerialScanner: lists serial ports every 3 s, opens new ones, asks I? and expects I,hud,2 (or I,tower,2 /
 I,tower,2 for the UNO Q USB-C fallback). Known Arduino / CH340 ports are tried first. Unplug and replug are fine."""
 import socket
 import threading
@@ -43,10 +43,31 @@ class UdpHub:
         self.port = self.sock.getsockname()[1]
         self.sock.settimeout(0.05)
         self.rx_count = 0
-        for role, key in (("robot", "ROBOT_ADDR"), ("tower", "TOWER_ADDR")):
-            addr = parse_addr(getattr(C, key))
-            if addr and role in self.links:
-                self._attach(addr, role, None)
+        self.manual = {}                       # role -> (ip, port) the Connections bar asked for
+        self.connect("robot", C.ROBOT_ADDR)
+
+    def connect(self, role, text):
+        """Connections bar: talk to this ip:port as the role. Replaces any earlier address of that role."""
+        self.disconnect(role)
+        try:
+            addr = parse_addr(text)
+        except ValueError:
+            return False
+        if addr and role in self.links:
+            self.manual[role] = addr
+            self._attach(addr, role, None)
+            tr = self.links[role].transports.get("%s:%d" % addr)
+            if tr is not None:
+                tr.last_rx = 0.0                 # not "connected" until the first pong comes back
+            return True
+        return False
+
+    def disconnect(self, role):
+        for addr in [a for a, r in self.peers.items() if r == role]:
+            self.peers.pop(addr, None)
+            if role in self.links:
+                self.links[role].detach("%s:%d" % addr)
+        self.manual.pop(role, None)
 
     def _attach(self, addr, role, fw):
         if self.peers.get(addr) != role:
@@ -77,7 +98,7 @@ class UdpHub:
             t = now()
             if t - t_who >= 1.0:
                 t_who = t
-                if any(not self.links[r].connected for r in self.links):
+                if any(not self.links[r].connected for r in self.links if r == "robot"):
                     for target in [("255.255.255.255", C.UDP_PORT)] + self.extra_hello_targets:
                         try:
                             self.sock.sendto(b"WHO?\n", target)
@@ -93,7 +114,7 @@ class UdpHub:
 
 
 class SerialPortTransport:
-    """A serial port (or anything with read/write/close, like the simulated station) carrying protocol lines."""
+    """A serial port (or anything with read/write/close, like the simulated HUD panel) carrying protocol lines."""
 
     def __init__(self, port, name):
         self.port, self.name, self.buf, self.dead = port, name, b"", False
@@ -166,10 +187,8 @@ class SerialScanner:
         while now() < end and not self.stop.is_set():
             for line in tr.read_lines():
                 msg = P.decode(line)
-                if msg and msg[0] == "I" and msg[1] in self.links:
+                if msg and msg[0] == "I" and (msg[1] in self.links or msg[1] in ("weather", "station")):
                     return tr, msg[1], msg[2]
-                if msg and msg[0] == "W" and "station" in self.links:      # v1 firmware: no I? reply
-                    return tr, "station", 1
             time.sleep(0.02)
         return None
 
@@ -188,7 +207,7 @@ class SerialScanner:
             self.ignored[name] = now() + 15.0
             return
         tr, role, fw = found
-        self._activate(name, tr, "station" if role == "weather" else role, fw)
+        self._activate(name, tr, "hud" if role in ("weather", "station") else role, fw)
 
     def _activate(self, name, tr, role, fw):
         with self.lock:
@@ -198,6 +217,46 @@ class SerialScanner:
 
     def add_sim(self, name, obj, role):
         self._activate(name, SerialPortTransport(obj, name), role, P.FW)
+
+    def connect(self, name, role=None):
+        """Connections bar: open this port now (own thread: the handshake takes about 3 s). The board's I? answer
+        decides the role; a role other than `role` is refused."""
+        def job():
+            self.last_error = ""
+            try:
+                import serial
+                with self.lock:
+                    if name in self.active:
+                        return
+                port = serial.Serial(name, C.SERIAL_BAUD, timeout=0, write_timeout=0.2)
+            except Exception as e:
+                self.last_error = "%s: %s" % (name, str(e)[:60])
+                self.log("cannot open %s: %s" % (name, e))
+                return
+            found = self._handshake(name, port)
+            if not found:
+                port.close()
+                self.last_error = "%s: no answer to I?" % name
+                return
+            tr, got, fw = found
+            got = "hud" if got in ("weather", "station") else got
+            if role and got != role:
+                tr.close()
+                self.last_error = "%s is the %s, not the %s" % (name, got, role)
+                return
+            self._activate(name, tr, got, fw)
+        threading.Thread(target=job, daemon=True, name="serial-connect").start()
+
+    def disconnect(self, role):
+        with self.lock:
+            items = [(n, v) for n, v in self.active.items() if v[1] == role]
+        for name, (tr, r) in items:
+            tr.close()
+            with self.lock:
+                self.active.pop(name, None)
+            self.links[r].detach(name)
+
+    last_error = ""
 
     def _scan_once(self):
         try:

@@ -6,7 +6,7 @@
 What it does:
   * answers P,seq,t with Q,seq,t at once (the laptop measures the round trip with this)
   * broadcasts HELLO,robot,2,<ip> once a second to the subnet so the laptop finds it by itself; answers WHO? and I?
-  * passes D (wheel speeds, only the newest one, at most 50 per second), X and R to the sketch
+  * passes D (wheel speeds) and C (camera pan), only the newest of each, at most 50 per second, plus X and R to the sketch
   * sends every line the sketch reports back to the laptop's last-seen address
   * treats 2 s of silence as "laptop gone": stops sending to it and keeps broadcasting HELLO
 Latest value wins: nothing is queued, a late command is worse than a new one.
@@ -27,7 +27,7 @@ ROLE = "robot"
 FW = 2
 PORT = 5005
 FORWARD = ("X", "R")          # lines passed to the microcontroller as they arrive
-LATEST = ("D",)           # lines where only the newest is kept and sent at most every 20 ms
+LATEST = ("D", "C")           # lines where only the newest is kept and sent at most every 20 ms (wheels, camera pan)
 LAPTOP_TIMEOUT = 2.0
 
 try:
@@ -204,10 +204,10 @@ def selftest():
         time.sleep(0.2)
         ds = [a[1] for a in fake.sent if a[0] == "line" and a[1].startswith("D,")]
         check("newest D wins, old ones are dropped (%d of 20 sent on)" % len(ds), ds and ds[-1] == "D,19,19,0" and len(ds) < 20)
-    fake.provided["mcu_line"]("K" if ROLE == "tower" else "S,0,100,0")
-    check("a line from the sketch reaches the laptop", t.recvfrom(100)[0].startswith(b"K" if ROLE == "tower" else b"S,0,100,0"))
-    time.sleep(2.2)
     fake.provided["mcu_line"]("B,L")
+    check("a line from the sketch reaches the laptop", t.recvfrom(100)[0].startswith(b"B,L"))
+    time.sleep(2.2)
+    fake.provided["mcu_line"]("B,R")
     t.settimeout(0.3)
     try:
         t.recvfrom(100)

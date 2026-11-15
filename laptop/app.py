@@ -13,7 +13,6 @@ import pygame
 
 import config as C
 from core import statemachine as S
-from core import weather as wx
 from core.clock import mmss, now
 from core.events import Bus
 from core.game import Game
@@ -23,13 +22,14 @@ from devio import recorder
 from devio.camera import Camera
 from devio.discovery import SerialScanner, UdpHub
 from devio.gamepad import InputThread, rumble
+from devio.connections import Connections
 from devio.keyboard_fallback import read_keys
-from devio.links import RobotLink, StationLink, TowerLink, link_thread
+from devio.links import HudLink, RobotLink, TowerLink, link_thread
 
 
 class Args:
     """Command line options as a plain object (also used by the tests)."""
-    sim_robot = sim_tower = sim_station = sim_camera = False
+    sim_robot = sim_tower = sim_hud = sim_camera = False
     windowed = False
     debug = False
     demo = False
@@ -41,11 +41,11 @@ class Args:
         for k, v in kw.items():
             setattr(self, k, v)
         if kw.get("sim"):
-            self.sim_robot = self.sim_tower = self.sim_station = self.sim_camera = True
+            self.sim_robot = self.sim_tower = self.sim_hud = self.sim_camera = True
 
     @property
     def sim_all(self):
-        return self.sim_robot and self.sim_tower and self.sim_station and self.sim_camera
+        return self.sim_robot and self.sim_tower and self.sim_hud and self.sim_camera
 
 
 class App:
@@ -66,7 +66,7 @@ class App:
         self.bus = Bus()
         self.stop_flag = threading.Event()
         self.links = {"robot": RobotLink(self.state, self.bus, self.log), "tower": TowerLink(self.state, self.bus, self.log),
-                      "station": StationLink(self.state, self.bus, self.log)}
+                      "hud": HudLink(self.state, self.bus, self.log)}
         from gfx import fonts, widgets
         fonts.reset()
         widgets._panels.clear()
@@ -74,9 +74,10 @@ class App:
         self.threads = []
         self.sims = []
         self._start_devices()
-        self.game = Game(self.state, self.links["robot"], self.links["tower"], self.links["station"], self.log)
-        if C.SPACE_WEATHER and not headless:
-            self.game.space.refresh()                # NASA DONKI flares, in the background
+        self.game = Game(self.state, self.links["robot"], self.links["tower"], self.links["hud"], self.log)
+        self.intro = None
+        self.intro_played = False
+        self.pan_deg, self.pan_sent, self.t_pan = 0.0, 0, 0.0
         self.sm = StateMachine(self._on_state)
         self.audio = None
         self.world_view = self.postfx = self.hud = None
@@ -125,8 +126,7 @@ class App:
     def _start_devices(self):
         a = self.args
         self.hub = UdpHub(self.links, self.log)
-        self.scanner = SerialScanner(self.links, self.log, C.WEATHER_PORT,
-                                     enabled=not (a.no_serial or (a.sim_robot and a.sim_tower and a.sim_station)))
+        self.scanner = SerialScanner(self.links, self.log, None, enabled=C.AUTO_SCAN and not (a.no_serial or a.sim_all))
         from devio import sim_devices as sd
         field = None
         if a.sim_robot:
@@ -135,21 +135,22 @@ class App:
             self.sim_robot = r
             field = r.field
         if a.sim_tower:
-            self.sims.append(sd.SimTower(self.hub.port))
-        self.sim_station = None
-        if a.sim_station:
-            s = sd.SimStation()
-            self.sim_station = s
+            t = sd.SimTower()
+            self.sim_tower = t
+            self.sims.append(t)
+            self.scanner.add_sim("SIM-TOWER", t.port, "tower")
+        self.sim_hud = None
+        if a.sim_hud:
+            s = sd.SimHud()
+            self.sim_hud = s
             self.sims.append(s)
-            self.scanner.add_sim("SIM-STATION", s.port, "station")
+            self.scanner.add_sim("SIM-HUD", s.port, "hud")
         src = None
         if a.sim_camera:
-            from core.hazards import HazardField
             robot = getattr(self, "sim_robot", None)
-            fld = field or HazardField()
-            from core.model import start_pose
-            src = sd.sim_camera_source((lambda: robot.pose) if robot else (lambda: self.game.ghost), fld)
+            src = sd.sim_camera_source((lambda: robot.pose) if robot else (lambda: self.game.craft))
         self.camera = Camera(self.state, self.log, sim_source=src, robot_ip=self._robot_ip)
+        self.connections = Connections(self.links, self.hub, self.scanner, self.camera, self.state, self.log)
         self.input = InputThread(self.state, self.links["robot"], self.log)
         for target, name in ((self.hub.run, "udp-hub"), (self.scanner.run, "serial-scan")):
             th = threading.Thread(target=self._guard(target, name), daemon=True, name=name)
@@ -162,6 +163,8 @@ class App:
             s.start()
         self.camera.start()
         self.input.start()
+        if not (a.no_serial or a.sim_all):
+            self.connections.connect_saved()
 
     def _guard(self, fn, name):
         """A device thread never dies on an error: log it, wait with a growing back-off, run again."""
@@ -202,12 +205,14 @@ class App:
 
         def hud():
             self.hud = Hud()
+            from gfx.intro import Intro
+            self.intro = Intro()
 
         def screens():
             self.menu, self.settings, self.calib = MenuScreen(), SettingsScreen(), CalibrateScreen()
             self.pause, self.results, self.hwcheck = PauseOverlay(), ResultsScreen(), HwCheckScreen()
 
-        self.boot = BootScreen([("fonts", lambda: None), ("sounds", audio), ("planet and stars", world), ("post-processing", post),
+        self.boot = BootScreen([("fonts", lambda: None), ("sounds", audio), ("lunar surface", world), ("post-processing", post),
                                 ("interface", hud), ("screens", screens), ("devices", lambda: None)])
 
     def boot_all(self):
@@ -281,23 +286,24 @@ class App:
             self.hud.toasts.add(text, kind)
 
     def start_run(self, practice=False):
-        self.game.reset(practice=practice)
+        intro = not self.intro_played and not C.SKIP_INTRO
+        self.game.reset(practice=practice, intro=intro)
+        self.intro_played = True
         self.hud.reset(self.game)
         self.world_view.parts.p.clear()
         self.world_view.parts.rings.clear()
-        self.world_view.ring_break = 0.0
-        self.world_view.ship.trail.clear()
+        self.world_view.track.clear()
         self.gameover_fx = None
         self.estop = False
         self.damage = 0.0
         self.cam_full = False
+        self.pan_deg = 0.0
+        self.links["robot"].pan(0)
         self.goto(S.PRACTICE if practice else S.PLAY)
 
     def menu_choice(self, name):
         if name == "PLAY":
             self.start_run(False)
-        elif name == "PRACTICE":
-            self.start_run(True)
         elif name == "CALIBRATE":
             self.goto(S.CALIBRATE)
         elif name == "SETTINGS":
@@ -329,12 +335,12 @@ class App:
             self.goto(S.MENU)
 
     def resync(self):
-        """Hold Start 2 s: robot to its start mark, game reset to 15 lives, same state."""
+        """Hold Start 2 s: restart the run."""
         practice = self.game.practice
         self.game.reset(practice=practice)
         self.hud.reset(self.game)
         self.estop = False
-        self.toast("Re-synced: put the robot on its start mark", "ok")
+        self.toast("Run restarted", "ok")
 
     def emergency_stop(self):
         """Space+Esc or Back+Start held: robot and tower stop at once and the game pauses."""
@@ -345,7 +351,7 @@ class App:
         self.state.test_cmd = None
         if self.sm.flying():
             self.goto(S.PAUSE)
-        self.toast("EMERGENCY STOP: robot and tower stopped. Resume to release.", "bad")
+        self.toast("EMERGENCY STOP: rover and tower stopped. Resume to release.", "bad")
 
     def after_results(self):
         self.links["robot"].latch(False)
@@ -364,9 +370,7 @@ class App:
             self.sm.go(S.GAMEOVER, self.t)
         self.gameover_fx = GameOverFX(self.world_view, g, self.audio)
         res = g.results()
-        mode = "AUTO-PILOT" if g.ap_time > g.t / 2 else "MANUAL"
-        self.last_results, self.last_mode = res, mode
-        self.history[mode] = res
+        self.last_results = res
         if res["time"] > C.BEST_TIME:
             C.save_local(BEST_TIME=round(res["time"], 1))
         rumble(self.state.pad, 1.0, 600)
@@ -422,13 +426,16 @@ class App:
                 self.audio.play("click")
             elif a == "cam":
                 self.cam_full = not self.cam_full
-            elif a == "fire" and g.practice:
-                g.fire_test_asteroid()
+            elif a == "recenter":
+                self.pan_deg = 0.0
+                self.toast("Camera centred")
+            elif isinstance(a, str) and a.startswith("act"):
+                msg = g.action(int(a[3:]))
+                if msg:
+                    self.toast(msg, "warn" if ("Not enough" in msg or "locked" in msg) else "ok")
+                    self.audio.play("click")
             elif a in ("start", "pause", "back"):
                 self.pause_game()
-            elif a in ("zone_hot", "zone_cold", "zone_normal"):
-                g.force_zone({"zone_hot": wx.HOT, "zone_cold": wx.COLD, "zone_normal": None}[a])
-                self.toast({"zone_hot": "Hot zone forced", "zone_cold": "Cold zone forced", "zone_normal": "Zones follow the craft"}[a])
         elif st == S.GAMEOVER:
             pass                                                       # after game over the stick does nothing
         elif st == S.PAUSE:
@@ -450,8 +457,8 @@ class App:
     KEYMAP = {pygame.K_UP: "up", pygame.K_DOWN: "down", pygame.K_LEFT: "left", pygame.K_RIGHT: "right",
               pygame.K_RETURN: "confirm", pygame.K_KP_ENTER: "confirm", pygame.K_F2: "hwcheck", pygame.K_F3: "postfx",
               pygame.K_F4: "debug", pygame.K_F11: "fullscreen", pygame.K_m: "mute", pygame.K_c: "cam", pygame.K_x: "fire",
-              pygame.K_p: "pause", pygame.K_h: "zone_hot", pygame.K_k: "zone_cold", pygame.K_n: "zone_normal",
-              pygame.K_y: "ap", pygame.K_f: "fire"}
+              pygame.K_p: "ap", pygame.K_y: "ap", pygame.K_r: "recenter",
+              pygame.K_1: "act1", pygame.K_2: "act2", pygame.K_3: "act3", pygame.K_4: "act4"}
 
     def _key(self, e):
         k, st = e.key, self.sm.state
@@ -476,32 +483,33 @@ class App:
                 return "left"
             if k == pygame.K_d:
                 return "right"
-        if st in (S.PLAY, S.PRACTICE) and k in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT):
+        if st in (S.PLAY, S.PRACTICE) and k in (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT, pygame.K_w, pygame.K_a, pygame.K_s,
+                                                pygame.K_d, pygame.K_q, pygame.K_e):
             return None
         if st == S.CALIBRATE and k == pygame.K_x:
             return "fire"
         a = self.KEYMAP.get(k)
-        if a in ("zone_hot", "zone_cold", "zone_normal") and st not in S.FLYING:
-            return None
-        if a == "pause" and st not in S.FLYING:
+        if a in ("recenter", "act1", "act2", "act3", "act4") and st not in S.FLYING:
             return None
         if a in ("ap", "cam", "fire") and st not in S.FLYING and st != S.CALIBRATE:
             return "back" if a == "cam" and st != S.HWCHECK else None
         return a
 
     def _sim_air_key(self, k):
-        s = self.sim_station
-        if s is None:
+        h = self.sim_hud
+        if h is None:
             return False
-        temp = {pygame.K_1: 36.0, pygame.K_2: 11.0, pygame.K_3: 23.0}.get(k)
+        temp = {pygame.K_7: 40.0, pygame.K_8: 12.0, pygame.K_9: 25.0}.get(k)
         if temp is None:
             return False
-        s.set_air(temp)
-        self.toast("Simulated air: %.0f C" % temp)
+        h.set_air(temp)
+        self.toast("Simulated sensor: %.0f C" % temp)
         return True
 
     def _button(self, b):
         st = self.sm.state
+        if st in S.FLYING and b in C.BTN_ACTIONS:
+            return "act%d" % (C.BTN_ACTIONS.index(b) + 1)
         if b == C.BTN_BACK:
             self.back_held = now()
             return "hwcheck" if st in (S.MENU, S.PAUSE) or st in S.FLYING else "back"
@@ -512,8 +520,6 @@ class App:
             return "ap" if st in S.FLYING else ("yes" if st == S.HWCHECK else None)
         if b == C.BTN_CAMERA:
             return "cam" if st in S.FLYING else "back"
-        if b == C.BTN_FIRE:
-            return "fire" if st in S.FLYING or st == S.CALIBRATE else ("no" if st == S.HWCHECK else None)
         if b == C.BTN_CONFIRM:
             return "confirm"
         return None
@@ -524,11 +530,21 @@ class App:
             if e.type == pygame.QUIT:
                 raise SystemExit
             elif e.type == pygame.KEYDOWN:
-                if self.sm.state in (S.PLAY, S.PRACTICE, S.MENU, S.PAUSE) and self._sim_air_key(e.key) and self.args.sim_station:
+                if self.game.intro_on and self.sm.flying():
+                    self.game.skip_intro()                              # any key skips the intro
+                    continue
+                if self.sm.state == S.MENU and (e.key in (pygame.K_TAB, pygame.K_F5) or self.menu.typing) and self.menu.on_key(self, e):
+                    continue
+                if self.sm.state in (S.PLAY, S.PRACTICE, S.MENU, S.PAUSE) and self._sim_air_key(e.key) and self.args.sim_hud:
                     continue
                 a = self._key(e)
+            elif e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and self.sm.state == S.MENU:
+                self.menu.on_click(self, e.pos)
             elif e.type == pygame.JOYBUTTONDOWN:
                 self.pad_button_seen = True
+                if self.game.intro_on and self.sm.flying():
+                    self.game.skip_intro()
+                    continue
                 a = self._button(e.button)
             elif e.type == pygame.JOYBUTTONUP:
                 if e.button == C.BTN_RESTART:
@@ -576,14 +592,14 @@ class App:
     def drain_bus(self):
         for ev in self.bus.drain():
             k = ev.kind
-            if k in ("scan", "bumper", "tower_k", "weather", "robot_air", "pot"):
+            if k in ("tower_warn", "tower_k", "hud_temp"):
                 self.game.handle(ev)
-                if k == "bumper":
-                    rumble(self.state.pad, 0.8, 300)
-                    self.toast("Bumper hit", "warn")
+            elif k == "bumper":
+                rumble(self.state.pad, 0.8, 300)
+                self.toast("Bumper hit", "warn")
             elif k in ("device_up", "device_down"):
                 role = ev.data[0]
-                label = {"robot": "Robot", "tower": "Tower", "station": "Weather station"}.get(role, role)
+                label = {"robot": "Rover", "tower": "Tower", "hud": "HUD panel"}.get(role, role)
                 if k == "device_up":
                     self.toast(label + " connected", "ok")
                     self.audio and self.audio.play("connect")
@@ -607,24 +623,23 @@ class App:
                 self.audio.play("incoming")
                 rumble(self.state.pad, 0.3, 200)
                 self.toast("ASTEROID INCOMING", "bad")
-            elif kind == "asteroid_fire":
-                self.audio.play("fire")
-            elif kind in ("dodged", "miss"):
-                self.audio.play("dodge")
-            elif kind == "burn":
-                self.audio.play("boom", 0.4)
-            elif kind == "weather":
-                if e[3] == "HOT":
-                    self.audio.play("hot")
-                    rumble(self.state.pad, 0.3, 200)
-                    self.toast("Hot zone: crew warning", "bad")
-                elif e[3] == "COLD":
-                    self.audio.play("cold")
-                    rumble(self.state.pad, 0.3, 200)
-                    self.toast("Cold zone: crew warning", "bad")
-            elif kind == "spike":
+            elif kind == "heart":
+                self.audio.play("heart")
+                rumble(self.state.pad, 0.6, 250)
+                self.hud.hit_flash = 0.25
+            elif kind == "pickup":
+                self.audio.play("pickup")
+                rumble(self.state.pad, 0.3, 120)
+                self.toast("Sample collected: %s" % e[3], "ok")
+            elif kind == "storm":
                 self.audio.play("spike")
-                self.toast("TEMPERATURE SPIKE DETECTED", "warn")
+                self.toast("RADIATION STORM", "warn")
+            elif kind == "harvest":
+                self.audio.play("confirm")
+            elif kind == "intro_end":
+                self.audio.play("ready")
+            elif kind == "gameover":
+                pass
         g.fx.clear()
         for text, kind in g.toasts:
             self.toast(text, kind)
@@ -645,6 +660,7 @@ class App:
         self.drain_bus()
         pad_dev = self.state.devices["pad"]
         pad_dev.connected = self.state.pad is not None or self.sim_all
+        self.connections.update()
         if self.sim_all and not self.pad_name:
             pad_dev.where, pad_dev.sim = "keyboard (sim)", True
         if st == S.BOOT:
@@ -665,26 +681,38 @@ class App:
         else:
             g.idle(dt, self.wall)
             self._fx()
+        if self.intro is not None and g.intro_on:
+            self.intro.update(dt)
+        if st in S.FLYING and not g.intro_on and not g.over:
+            self._pan(dt)
         if st == S.GAMEOVER:
             self._fx()
         self.state.turn_scale = g.state.turn_scale
         {S.MENU: self.menu, S.SETTINGS: self.settings, S.CALIBRATE: self.calib, S.HWCHECK: self.hwcheck,
          S.RESULTS: self.results}.get(st, _NullScreen()).update(self, dt)
-        speed01 = abs(g.speed_cms) / max(1.0, C.V_MAX) if st in S.FLYING else 0.0
+        speed01 = abs(g.speed_ms) / max(0.1, C.V_MAX * C.METERS_PER_CM) if st in S.FLYING else 0.0
         self.world_view.update(dt, g, speed01)
-        self.postfx.update(dt, g.weather.state if st in S.FLYING or st == S.PAUSE else 0)
+        self.postfx.update(dt, g.thermal.state if st in S.FLYING or st == S.PAUSE else 0)
         self.hud.update(dt, g)
         self.shake.update(dt)
         self.damage = max(0.0, self.damage - dt * 3.0)
         self.audio.update(speed01, st in S.FLYING and not g.over, st in S.FLYING or st == S.PAUSE)
-        # restart weather csv logging
-        if st in S.FLYING:
-            if not hasattr(self, "wcsv"):
-                self.wcsv = recorder.WeatherCsv()
-            self.wcsv.maybe(self.wall, g.weather)
+
+    def _pan(self, dt):
+        """Q / E and the right stick pan the camera; R recentres. Sends C,angle when it changes (at most 20 per second)."""
+        keys = pygame.key.get_pressed()
+        d = (1.0 if keys[pygame.K_e] else 0.0) - (1.0 if keys[pygame.K_q] else 0.0)
+        if d == 0.0 and self.state.pad is not None and 0 <= C.AXIS_PAN < len(self.state.raw_axes):
+            from core.model import shape_axis
+            d = shape_axis(self.state.raw_axes[C.AXIS_PAN])
+        self.pan_deg = max(-C.PAN_LIMIT_DEG, min(C.PAN_LIMIT_DEG, self.pan_deg + d * C.PAN_SPEED_DEG_S * dt))
+        t = now()
+        if int(round(self.pan_deg)) != self.pan_sent and t - self.t_pan >= 0.05:
+            self.pan_sent, self.t_pan = int(round(self.pan_deg)), t
+            self.links["robot"].pan(self.pan_sent)
 
     def _ctx(self):
-        return {"ap_on": self.state.ap_on, "speed01": min(1.0, abs(self.game.speed_cms) / max(1.0, C.V_MAX)),
+        return {"ap_on": self.state.ap_on, "speed01": min(1.0, abs(self.game.speed_ms) / max(0.1, C.V_MAX * C.METERS_PER_CM)),
                 "shake": self.shake.offset(), "hide_craft": self.sm.state in (S.GAMEOVER,),
                 "backdrop": self.sm.state in (S.MENU, S.SETTINGS, S.CALIBRATE, S.HWCHECK)}
 
@@ -701,19 +729,24 @@ class App:
             if st == S.GAMEOVER and self.gameover_fx:
                 pass
             self.postfx.apply(cv, self.damage)
-            ui = {"state": self.state, "ap_on": self.state.ap_on, "camera": self.camera, "cam_full": self.cam_full and st in S.FLYING,
-                  "delay_ms": (self.links["robot"].one_way_s() * 1000.0) if self.links["robot"].connected else None,
-                  "debug": self._debug_info() if self.debug_on else None}
-            if st in S.FLYING or st == S.PAUSE:
+            ui = {"conn": self.connections.snapshot(), "ap_on": self.state.ap_on, "camera": self.camera,
+                  "cam_full": self.cam_full and st in S.FLYING, "debug": self._debug_info() if self.debug_on else None}
+            if st in S.FLYING and g.intro_on:
+                alpha = self.intro.draw(self.intro_surf(), g.intro_t)
+                s = self.intro_surf()
+                s.set_alpha(alpha)
+                cv.blit(s, (0, 0))
+            elif st in S.FLYING or st == S.PAUSE:
                 self.hud.draw(cv, g, ui)
             elif st == S.GAMEOVER:
-                self.hud.lives_panel(cv, g)
-                self.hud.status_strip(cv, self.state)
+                self.hud.meters_panel(cv, g)
+                self.hud.conn_strip(cv, ui["conn"])
                 self.gameover_fx.draw(cv, g)
             else:
                 dim(cv, 120 if st == S.MENU else 195)
-                self.hud.status_strip(cv, self.state)
-                self.hud.toasts.draw(cv, C.RENDER_W // 2, 74)
+                if st != S.MENU:
+                    self.hud.conn_strip(cv, ui["conn"])
+                self.hud.toasts.draw(cv, C.RENDER_W // 2, 840 if st == S.MENU else 74)
                 {S.MENU: self.menu, S.SETTINGS: self.settings, S.CALIBRATE: self.calib, S.HWCHECK: self.hwcheck}[st].draw(cv, self)
             if st == S.PAUSE:
                 self.pause.draw(cv, self)
@@ -727,18 +760,23 @@ class App:
             pygame.transform.smoothscale(cv, self.screen.get_size(), self.screen)
         pygame.display.flip()
 
+    def intro_surf(self):
+        if not hasattr(self, "_intro_surf"):
+            self._intro_surf = pygame.Surface((C.RENDER_W, C.RENDER_H)).convert()
+        return self._intro_surf
+
     def _debug_info(self):
         now_t = now()
         threads = {}
         for n, tt in self.state.threads.items():
             threads[n] = "alive %4.0f ms ago" % ((now_t - tt) * 1000)
         threads["camera"] = "%.0f fps" % self.camera.fps if self.camera.is_alive() else "stopped"
-        packets = ["robot  tx %d rx %d    tower tx %d rx %d    station rx %d" % (
-            self.links["robot"].tx, self.links["robot"].rx, self.links["tower"].tx, self.links["tower"].rx, self.links["station"].rx),
+        packets = ["rover  tx %d rx %d    tower tx %d rx %d    hud rx %d" % (
+            self.links["robot"].tx, self.links["robot"].rx, self.links["tower"].tx, self.links["tower"].rx, self.links["hud"].rx),
             "input thread %.0f Hz   hub rx %d   errors %d" % (self.input.rate, self.hub.rx_count, self.input.errors)]
         rb = self.links["robot"].best()
         if rb and rb.rtt_ms is not None:
-            packets.append("robot rtt %.1f ms   loss %.1f %%" % (rb.rtt_ms, rb.loss() * 100))
+            packets.append("rover rtt %.1f ms   loss %.1f %%" % (rb.rtt_ms, rb.loss() * 100))
         return {"fps": self.fps, "ms": self.frame_ms, "worst": self.worst_ms, "postfx": self.postfx.level, "threads": threads, "packets": packets}
 
     def frame(self, dt=None):
@@ -794,6 +832,7 @@ class App:
             self.state.drive_enabled = False
             time.sleep(0.06)
             self.links["robot"].send("D,0,0,0")
+            self.links["robot"].send("X")
             self.links["tower"].send("X")
         except Exception:
             pass

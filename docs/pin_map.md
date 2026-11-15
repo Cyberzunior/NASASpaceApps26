@@ -1,44 +1,49 @@
-# Pin maps (match the wiring diagrams in docs/diagrams and the firmware in firmware/)
+# Pin maps (match the firmware in firmware/). All three boards are Arduino UNO Q: 3.3 V logic, never put 5 V on an input.
 
-## Weather station: ELEGOO UNO R3 (5 V pins)
+## HUD panel: UNO Q, USB cable to the laptop (`firmware/hud_panel/hud_panel.ino`)
 | Pin | Goes to |
 |---|---|
-| D2 | free (the DHT11 was removed) |
-| A1 | 10k pot wiper (outer legs 5V / GND): orbit temperature swing, 0 to 12 C, or picks a NASA solar flare in the game |
-| D3 | Green LED (220 ohm) |
-| D4 | Blue LED (220 ohm) |
-| D5 | Red LED (220 ohm) |
-| A0 | Yellow hit LED (220 ohm) |
-| D6 | Active buzzer: beeps 100 ms on / off for HOT, 200 ms on / off for COLD |
-| D7 | free (was the passive buzzer) |
+| D2 | DHT11 data (sensor powered from 3V3) |
+| D3 | Green LED (220 ohm): normal |
+| D4 | Blue LED (220 ohm): cold |
+| D5 | Red LED (220 ohm): hot (if fitted) |
+| A0 | Yellow LED (220 ohm): sample picked up |
+| D6 | unused |
+| D7 | Passive buzzer + (driven with `tone()`: 2000 Hz hot, 400 Hz cold, 1200 Hz chirp on pickup) |
 | D8 / D9 | LCD RS / E |
 | D10 D11 D12 D13 | LCD D4 D5 D6 D7 |
-| A4 / A5 | I2C display SDA / SCL (lives, add later: `HAS_LIVES_LCD 1`) |
+| SDA / SCL | I2C OLED SSD1306 at 0x3C, powered from 3V3 |
 
-## Robot: Arduino UNO Q #1 (3.3 V pins), two DRV8833 modules
-Each module drives one side. On each module the A and B channels are joined (inputs tied together, outputs tied
-together) so each side carries two motors. nSLEEP of both modules goes to 3V3.
+## Rover: UNO Q, Wi-Fi (`firmware/robot/`), 2WD with two DRV8833 boards
+Two TT gear motors, one left, one right, plus a caster or skid. One DRV8833 per motor, channel 1 of each board
+(IN1, IN2, OUT1, OUT2). Channel 2 of each board is unused. Motor power: 9 V pack on VM of both boards (the laptop scales
+every command to MAX_PWM = 170 because TT motors are 6 V parts). No capacitors are part of this build.
 
 | Pin | Goes to |
 |---|---|
-| D3 / D5 | Left DRV8833 IN1 / IN2 (forward = PWM on IN1, IN2 low) |
-| D6 / D9 | Right DRV8833 IN1 / IN2 |
-| D2 D4 D7 D8 | ULN2003 IN1 IN2 IN3 IN4 (turret stepper, code order 2, 7, 4, 8 = IN1, IN3, IN2, IN4) |
-| A0 / A1 | HC-SR04 TRIG / ECHO (ECHO through 1k + 2k divider). A0 and A1 are not 5 V tolerant |
-| A2 / A3 | Left / right bumper button (other leg to GND) |
-| D13 | Status LED (220 ohm) |
-| D10 | Optional second DHT11 (robot air), `HAS_ROBOT_DHT 1`. D11 and D12 are spare |
-| 3V3 | DRV8833 nSLEEP |
+| D5 (PWM) | Left DRV8833 IN1 |
+| D6 (PWM) | Left DRV8833 IN2 |
+| D9 (PWM) | Right DRV8833 IN1 |
+| D10 (PWM) | Right DRV8833 IN2 |
+| 3V3 | EEP / SLP (sleep) pin on both boards |
+| GND | GND on both boards and the 9 V pack - |
+| A2, A3 | Left and right bumper buttons (if fitted, other leg to GND) |
+| D4, D7, D8, D12 | ULN2003 IN1 to IN4: the 28BYJ-48 that pans the C920 webcam |
+| D13 | Status LED |
+| A0, A1 | free (the HC-SR04 is gone) |
 
-D3, D5, D6 and D9 must give PWM. The UNO Q pinout lists PWM on D3, D5, D6, D9, D10 and D11. D5 is shared with the CAN
-bus, which this project does not use.
+Forward = PWM on IN1 with IN2 low, reverse = PWM on IN2, both low = coast (`stopAll()`).
+**Not verified on hardware:** third-party pinouts list PWM on D3 D5 D6 D9 D10 D11, but forum posts report that `pinMode()` on a PWM pin
+can stop `analogWrite()` on the UNO Q core (the rover sketch never calls it on those pins) and that enabling PWM on one pin can disable
+other GPIO. If a wheel does not turn, or the stepper misbehaves once PWM runs, move that input to another PWM pin and edit this table.
 
-## Tower: Arduino UNO Q #2
+The Logitech C920 plugs into the rover's USB port (Linux side). `firmware/robot/linux_bridge/camera_stream.py` serves it as MJPEG
+(640 x 480, 15 fps) at `http://<rover ip>:8080/stream`: put that in the Camera URL field.
+
+## Tower: UNO Q, USB cable to the laptop (`firmware/tower/tower.ino`)
 | Pin | Goes to |
 |---|---|
 | D9 | Push servo signal |
 | D10 | Pan servo signal (second SG90, `HAS_PAN 1`) |
-| D13 | Armed LED (220 ohm) |
-| D2 | Test-fire button (other leg to GND) |
-
-Power: see docs/diagrams/pow.png and rpow.png. Different supplies share only GND.
+| D13 | Armed LED (220 ohm), blinks during the warning |
+| D2 | Test-fire button (other leg to GND): runs the same warn, fire, release sequence |

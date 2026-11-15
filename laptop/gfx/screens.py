@@ -5,11 +5,11 @@ import random
 import pygame
 import config as C
 from core import calibration as cal
-from core import weather as wx
 from core.clock import mmss, now
 from gfx import fonts, palette as K
+from gfx.connections import ConnectionsPanel
 from gfx.widgets import dot, panel
-from gfx.ship import glow_sprite
+from gfx.rover import glow_sprite
 
 
 def dim(surf, alpha=170):
@@ -69,10 +69,6 @@ class BootScreen:
 
     def draw(self, surf, app):
         cx, cy = C.RENDER_W // 2, C.RENDER_H // 2
-        for i in range(3):                                           # the orbit ring draws itself around the logo
-            r = 170 + i * 42
-            a0 = self.t * (0.8 + i * 0.3)
-            pygame.draw.arc(surf, K.mix(K.BG, K.CYAN, 0.8 - i * 0.22), (cx - r, cy - r - 40, 2 * r, 2 * r), a0, a0 + 3.2 + i, 3)
         n = len("T-Minus_6")
         shown = min(n, int(self.t * 9))
         fonts.text(surf, "T-Minus_6"[:shown], (cx, cy - 40), 120, K.WHITE, bold=True, anchor="center", shadow=True)
@@ -85,9 +81,9 @@ class BootScreen:
 
 class MenuScreen:
     def __init__(self):
-        self.list = MenuList([("PLAY", "15 lives, asteroids, the real game"), ("PRACTICE", "no lives lost, X fires an asteroid"),
-                              ("CALIBRATE", "speed, turn, latency, tower aim"), ("SETTINGS", "volume, post-fx, thresholds, demo mode"),
-                              ("HARDWARE CHECK", "test every device before the demo"), ("QUIT", "")])
+        self.list = MenuList([("PLAY", "drive, collect samples, keep four meters alive"), ("CALIBRATE", "rover speed, turn, link delay"),
+                              ("SETTINGS", "volume, post-fx, intro"), ("HARDWARE CHECK", "test every device"), ("QUIT", "")])
+        self.conn = ConnectionsPanel()
 
     def handle(self, app, a):
         if a == "up":
@@ -98,32 +94,39 @@ class MenuScreen:
             app.audio.play("confirm")
             app.menu_choice(self.list.items[self.list.i][0])
 
+    def on_key(self, app, e):
+        """Keys for the Connections bar. True = used."""
+        return self.conn.on_key(app.connections, e)
+
+    def on_click(self, app, pos):
+        return self.conn.on_click(app.connections, pos)
+
+    @property
+    def typing(self):
+        return self.conn.focus is not None
+
     def update(self, app, dt):
         pass
 
     def draw(self, surf, app):
-        title(surf, "T-Minus_6", 150, 96, K.WHITE)
-        fonts.text(surf, "ORBIT. DODGE. SURVIVE.", (C.RENDER_W // 2, 232), 24, K.CYAN, anchor="center")
-        panel(surf, pygame.Rect(C.RENDER_W // 2 - 490, 310, 980, 420), 190, scan=False)
-        self.list.draw(surf, C.RENDER_W // 2 - 440, 330)
-        ready = app.hwcheck.ready(app)
-        fonts.text(surf, "READY FOR DEMO" if ready else "hardware not checked yet",
-                   (C.RENDER_W // 2, C.RENDER_H - 110), 28 if ready else 20, K.GREEN if ready else K.GREY, bold=ready, anchor="center")
+        self.conn.draw(surf, app.connections, app.t)
+        title(surf, "T-Minus_6", 335, 80, K.WHITE)
+        fonts.text(surf, "DRIVE. COLLECT. SURVIVE THE LUNAR NIGHT.", (C.RENDER_W // 2, 400), 24, K.CYAN, anchor="center")
+        panel(surf, pygame.Rect(C.RENDER_W // 2 - 490, 440, 980, 360), 190, scan=False)
+        self.list.draw(surf, C.RENDER_W // 2 - 440, 455, 62, 36)
         fonts.text(surf, "BEST  %s" % mmss(C.BEST_TIME), (C.RENDER_W - 40, C.RENDER_H - 110), 22, K.GREY, anchor="topright")
-        hints(surf, "up / down: choose    A or Enter: select    F2 / Back: hardware check    F11: fullscreen    M: mute")
+        hints(surf, "up / down: choose    A or Enter: select    Tab: connections    F2 / Back: hardware check    F11: fullscreen    M: mute")
 
 
 class SettingsScreen:
-    ITEMS = ("Master volume", "Post-processing", "Demo mode", "After game over", "Hot above (C)", "Cold below (C)", "Spike (C in 10 s)",
-             "Weather slows turns", "Privacy: never save frames", "Back")
+    ITEMS = ("Master volume", "Post-processing", "Skip intro", "After game over", "Back")
 
     def __init__(self):
         self.list = MenuList([(i, "") for i in self.ITEMS])
 
     def value(self, k):
-        return [("%d%%" % round(C.MASTER_VOLUME * 100)), ("OFF", "VIGNETTE", "FULL")[C.POSTFX], "ON" if C.DEMO_MODE else "OFF",
-                "straight back to PLAY" if C.RESTART_TO_PLAY else "go to MENU", "%.0f" % C.HOT_C, "%.0f" % C.COLD_C, "%.0f" % C.SPIKE_C,
-                "%d%%" % round(C.WEATHER_TURN_PENALTY * 100), "ON" if C.PRIVACY_NO_SAVE_FRAMES else "OFF", ""][k]
+        return [("%d%%" % round(C.MASTER_VOLUME * 100)), ("OFF", "VIGNETTE", "FULL")[C.POSTFX], "ON" if C.SKIP_INTRO else "OFF",
+                "straight back to PLAY" if C.RESTART_TO_PLAY else "go to MENU", ""][k]
 
     def change(self, app, d):
         i = self.list.i
@@ -133,19 +136,9 @@ class SettingsScreen:
             C.save_local(POSTFX=(C.POSTFX + d) % 3)
             app.postfx.level = C.POSTFX
         elif i == 2:
-            C.save_local(DEMO_MODE=not C.DEMO_MODE)
+            C.save_local(SKIP_INTRO=not C.SKIP_INTRO)
         elif i == 3:
             C.save_local(RESTART_TO_PLAY=not C.RESTART_TO_PLAY)
-        elif i == 4:
-            C.save_local(HOT_C=float(max(C.COLD_C + 4, min(60, C.HOT_C + d))))
-        elif i == 5:
-            C.save_local(COLD_C=float(max(-10, min(C.HOT_C - 4, C.COLD_C + d))))
-        elif i == 6:
-            C.save_local(SPIKE_C=float(max(1, min(10, C.SPIKE_C + d))))
-        elif i == 7:
-            C.save_local(WEATHER_TURN_PENALTY=round(max(0.0, min(0.6, C.WEATHER_TURN_PENALTY + 0.1 * d)), 2))
-        elif i == 8:
-            C.save_local(PRIVACY_NO_SAVE_FRAMES=not C.PRIVACY_NO_SAVE_FRAMES)
         app.audio.play("click")
 
     def handle(self, app, a):
@@ -202,13 +195,13 @@ class PauseOverlay:
     def draw(self, surf, app):
         dim(surf, 190)
         title(surf, "PAUSED", 330, 90, K.WHITE)
-        fonts.text(surf, "robot stopped", (C.RENDER_W // 2, 395), 22, K.GREY, anchor="center")
+        fonts.text(surf, "rover stopped", (C.RENDER_W // 2, 395), 22, K.GREY, anchor="center")
         self.list.draw(surf, C.RENDER_W // 2 - 260, 450, 64, 34, 520)
-        hints(surf, "Start: resume    hold Start 2 s: re-sync robot to its start mark and reset the game")
+        hints(surf, "Start: resume    hold Start 2 s: restart the run")
 
 
 class CalibrateScreen:
-    STEPS = ("fwd", "turn", "latency", "aim", "done")
+    STEPS = ("fwd", "turn", "latency", "done")
 
     def __init__(self):
         self.reset()
@@ -240,7 +233,7 @@ class CalibrateScreen:
         if step == "fwd":
             if a in ("confirm", "start") and not self.text:
                 if not app.links["robot"].connected:
-                    self.msg = "No robot connected. Connect it (or run with --sim) and try again."
+                    self.msg = "No rover connected. Connect it in the menu bar and try again."
                     return
                 v = C.V_MAX * 0.5
                 secs = 50.0 / max(1.0, v)
@@ -256,7 +249,7 @@ class CalibrateScreen:
         elif step == "turn":
             if a in ("confirm", "start") and not self.text:
                 if not app.links["robot"].connected:
-                    self.msg = "No robot connected."
+                    self.msg = "No rover connected."
                     return
                 secs = 360.0 / max(1.0, C.W_MAX)
                 self.msg = "Turning on the spot for %.1f s. Count the degrees it turned (360 = one full turn)." % secs
@@ -277,17 +270,6 @@ class CalibrateScreen:
                 elif self.rtt:
                     self.new["SYNC_DELAY_MS"] = cal.sync_delay_from(sum(self.rtt) / len(self.rtt) / 2.0)
                     self.msg, self.i = "", self.i + 1
-        elif step == "aim":
-            if a == "left":
-                self.new["AIM_CENTER_DEG"] = max(0.0, self.new.get("AIM_CENTER_DEG", C.AIM_CENTER_DEG) - 1)
-                app.links["tower"].aim(int(self.new["AIM_CENTER_DEG"]))
-            elif a == "right":
-                self.new["AIM_CENTER_DEG"] = min(180.0, self.new.get("AIM_CENTER_DEG", C.AIM_CENTER_DEG) + 1)
-                app.links["tower"].aim(int(self.new["AIM_CENTER_DEG"]))
-            elif a == "fire":
-                app.links["tower"].fire(test=True)
-            elif a in ("confirm", "start"):
-                self.i += 1
         elif step == "done":
             if a in ("confirm", "start"):
                 if cal.save(**self.new):
@@ -308,20 +290,18 @@ class CalibrateScreen:
             if now() >= end:
                 self.stop(app)
                 self.msg = "Done. Type the number you measured and press Enter." if self.STEPS[self.i] != "latency" else \
-                    ("Average round trip %.0f ms. Press Enter to use half of it." % (sum(self.rtt) / len(self.rtt)) if self.rtt else "No replies from the robot.")
+                    ("Average round trip %.0f ms. Press Enter to use half of it." % (sum(self.rtt) / len(self.rtt)) if self.rtt else "No replies from the rover.")
 
     def draw(self, surf, app):
         title(surf, "CALIBRATE", 100)
         step = self.STEPS[self.i]
         y = 190
-        steps = {"fwd": ("1 / 4   Forward speed", "Put the robot on the table. Press A / Enter: it drives half speed for the time the game expects "
+        steps = {"fwd": ("1 / 3   Forward speed", "Put the rover on the table. Press A / Enter: it drives half speed for the time the game expects "
                          "to cover 50 cm.", "Type the distance it really covered (cm), then Enter."),
-                 "turn": ("2 / 4   Turn rate", "Press A / Enter: the robot spins on the spot for the time the game expects to cover 360 degrees.",
+                 "turn": ("2 / 3   Turn rate", "Press A / Enter: the rover spins on the spot for the time the game expects to cover 360 degrees.",
                           "Type the degrees it really turned, then Enter."),
-                 "latency": ("3 / 4   Link delay", "Press A / Enter to measure the round trip to the robot. Half of it becomes the screen delay "
-                             "(SYNC_DELAY_MS) so the craft and the robot move together.", ""),
-                 "aim": ("4 / 4   Tower aim", "Left / right moves the pan servo, X or F fires a test ball. Set the angle where the ball "
-                         "flies straight at Earth, then press Enter.", ""),
+                 "latency": ("3 / 3   Link delay", "Press A / Enter to measure the round trip to the rover. Half of it becomes the screen delay "
+                             "(SYNC_DELAY_MS) so the screen and the rover move together.", ""),
                  "done": ("Done", "These values will be saved to config.local.json:", "")}[step]
         fonts.text(surf, steps[0], (C.RENDER_W // 2, y), 40, K.WHITE, bold=True, anchor="midtop")
         self.wrap(surf, steps[1], C.RENDER_W // 2, y + 70, 1100, 26, K.GREY)
@@ -331,9 +311,6 @@ class CalibrateScreen:
             pygame.draw.rect(surf, (20, 32, 60), box, border_radius=10)
             pygame.draw.rect(surf, K.CYAN, box, 2, border_radius=10)
             fonts.text(surf, self.text + ("_" if int(now() * 2) % 2 else ""), box.center, 36, K.WHITE, mono=True, anchor="center")
-        if step == "aim":
-            v = self.new.get("AIM_CENTER_DEG", C.AIM_CENTER_DEG)
-            fonts.text(surf, "pan servo  %d deg" % v, (C.RENDER_W // 2, y + 220), 44, K.CYAN, mono=True, anchor="midtop")
         if step == "done":
             for k, (key, val) in enumerate(self.new.items()):
                 fonts.text(surf, "%-16s %s" % (key, val), (C.RENDER_W // 2, y + 140 + k * 40), 30, K.GREEN, mono=True, anchor="midtop")
@@ -362,39 +339,36 @@ class HwCheckScreen:
     """One page that tests everything before the demo. READY FOR DEMO only when every check passed this session."""
     CHECKS = [
         ("pad", "Gamepad found, stick moved", "auto"),
-        ("robot_link", "Robot connected, round trip under 80 ms", "auto"),
-        ("robot_scan", "Robot turret sweeps both sides (scan readings)", "auto"),
-        ("wheels_l", "Left wheels spin forward (robot lifted)", "manual"),
-        ("wheels_r", "Right wheels spin forward", "manual"),
-        ("tower_link", "Tower connected", "auto"),
-        ("tower_fire", "Tower released one ball and answered K", "auto"),
-        ("station_link", "Weather station connected, W readings arriving", "auto"),
-        ("leds", "LEDs flash: red hot, blue cold, yellow hit", "manual"),
-        ("buzzers", "Buzzer on D6: fast beeps (hot), slower beeps (cold)", "manual"),
-        ("lcd", "Weather LCD shows the hot and cold warnings", "manual"),
+        ("robot_link", "Rover connected, round trip under 80 ms", "auto"),
+        ("wheels_l", "Left wheel spins forward (rover lifted)", "manual"),
+        ("wheels_r", "Right wheel spins forward", "manual"),
+        ("pan", "Camera pans left and right", "manual"),
         ("camera", "Camera picture is live", "auto"),
+        ("tower_link", "Tower connected", "auto"),
+        ("tower_fire", "Tower warned, fired and answered K", "auto"),
+        ("hud_link", "HUD panel connected, temperature readings arriving", "auto"),
+        ("leds", "HUD LEDs: yellow blinks on pickup, red hot, blue cold", "manual"),
+        ("buzzer", "HUD buzzer: fast high beeps hot, low beeps cold", "manual"),
+        ("lcd", "HUD LCD and OLED show the numbers", "manual"),
     ]
-    TESTS = {"1": "Spin LEFT wheels", "2": "Spin RIGHT wheels", "3": "Sweep turret", "4": "Fire tower once",
-             "5": "Flash LEDs + buzzers", "6": "Hot warning on LCD", "7": "Cold warning on LCD"}
+    TESTS = {"1": "Spin LEFT wheel", "2": "Spin RIGHT wheel", "3": "Pan the camera", "4": "Fire tower once",
+             "5": "Pickup blink + chirp", "6": "Hot warning", "7": "Cold warning"}
 
     def __init__(self):
         self.status = {k: None for k, _, _ in self.CHECKS}          # None pending, True pass, False fail
         self.job = None
         self.ask = None                                            # manual check waiting for Y / N
         self.t_total = 0.0
-        self.scan_angles = set()
         self.pad_ok = False
         self.fire_t = -1.0
-        self.was_ready = False
+        self.sim_zone = None
 
     def ready(self, app):
-        return all(self.status.values()) or (app.sim_all and self.status_auto_sim())
-
-    def status_auto_sim(self):
-        return True
+        return all(self.status.values()) or (app.sim_all and True)
 
     def handle(self, app, a):
         if a == "back":
+            app.links["hud"].set_zone(0)
             app.goto(app.hw_return)
             return
         if isinstance(a, str) and a.startswith("char:") and a[5:] in self.TESTS:
@@ -407,19 +381,21 @@ class HwCheckScreen:
             self.ask = None
 
     def start_test(self, app, key):
-        r, t, s = app.links["robot"], app.links["tower"], app.links["station"]
+        r, t, h = app.links["robot"], app.links["tower"], app.links["hud"]
         if self.job:
             return
         if key in ("1", "2"):
             if not r.connected:
-                app.toast("Robot not connected", "bad")
+                app.toast("Rover not connected", "bad")
                 return
-            v = 170
+            v = C.MAX_PWM
             app.state.test_cmd = (v, 0) if key == "1" else (0, v)
             self.job = ("wheels_l" if key == "1" else "wheels_r", now() + 1.0)
         elif key == "3":
-            self.scan_angles.clear()
-            self.job = ("sweep", now() + 6.5)
+            if not r.connected:
+                app.toast("Rover not connected", "bad")
+                return
+            self.job = ("pan", now() + 4.0)
         elif key == "4":
             if not t.connected:
                 app.toast("Tower not connected", "bad")
@@ -427,20 +403,22 @@ class HwCheckScreen:
             t.allow(True)
             if t.fire(test=True):
                 self.fire_t = now()
-                app.toast("Fired: watch for one ball", "warn")
+                app.toast("Fired: warning first, then one ball", "warn")
             else:
                 app.toast("Tower disarmed or fired within 2 s", "warn")
         elif key == "5":
-            if not s.connected:
-                app.toast("Station not connected", "bad")
+            if not h.connected:
+                app.toast("HUD panel not connected", "bad")
                 return
-            self.job = ("leds", now() + 5.0)
+            h.pickup()
+            h.chirp()
+            self.job = ("leds", now() + 2.0)
         elif key in ("6", "7"):
-            if not s.connected:
-                app.toast("Station not connected", "bad")
+            if not h.connected:
+                app.toast("HUD panel not connected", "bad")
                 return
-            app.game.force_zone(wx.HOT if key == "6" else wx.COLD)
-            self.job = ("lcd", now() + 3.0)
+            h.set_zone(2 if key == "6" else 1)
+            self.job = ("hot" if key == "6" else "cold", now() + 4.0)
 
     def update(self, app, dt):
         self.t_total += dt
@@ -449,62 +427,49 @@ class HwCheckScreen:
         ax = max([abs(v) for v in app.state.raw_axes] or [0.0])
         if app.state.pad is not None and (ax > 0.5 or abs(app.state.stick[0]) > 0.5 or abs(app.state.stick[1]) > 0.5 or app.pad_button_seen):
             st["pad"] = True
-        elif app.sim_all:
-            st["pad"] = True
         rb = snap["robot"]
-        if rb[0] and (rb[4] is None or rb[4] < C.RTT_WARN_MS):
-            if rb[4] is not None:
-                st["robot_link"] = True
-        for ang in app.game.radar:
-            self.scan_angles.add(ang)
-        if min(self.scan_angles or [0]) <= -30 and max(self.scan_angles or [0]) >= 30:
-            st["robot_scan"] = True
+        if rb[0] and rb[4] is not None and rb[4] < C.RTT_WARN_MS:
+            st["robot_link"] = True
         if snap["tower"][0]:
             st["tower_link"] = True
         if self.fire_t > 0 and app.links["tower"].last_k > self.fire_t:
             st["tower_fire"] = True
-        if snap["station"][0] and app.game.weather.temp is not None:
-            st["station_link"] = True
+        if snap["hud"][0] and app.links["hud"].last_w is not None:
+            st["hud_link"] = True
         if app.camera is not None and app.camera.live():
             st["camera"] = True
-        if app.sim_all:                                              # --sim: everything is a software device, auto-green
+        if app.sim_all:
             for k in st:
                 st[k] = True
         if self.job:
             name, end = self.job
             t = now()
-            if name == "leds":
-                phase = int((5.0 - (end - t)) / 1.5)
-                app.game.force_zone((wx.HOT, wx.COLD, None, None)[min(3, max(0, phase))])
-                if phase == 2 and int(t * 4) % 4 == 0:
-                    app.links["station"].set_lives(app.game.lives.lives - 1)
-                if phase >= 2:
-                    app.links["station"].set_lives(app.game.lives.lives)
+            if name == "pan":
+                phase = (4.0 - (end - t)) / 1.0
+                app.links["robot"].pan((-60, 60, -60, 0)[min(3, max(0, int(phase)))])
             if t >= end:
                 app.state.test_cmd = None
-                if name in ("wheels_l", "wheels_r"):
+                if name in ("wheels_l", "wheels_r", "pan"):
                     self.ask = name
                 elif name == "leds":
-                    app.game.force_zone(None)
                     self.ask = "leds"
-                elif name == "lcd":
-                    app.game.force_zone(None)
-                    self.ask = "lcd"
+                elif name in ("hot", "cold"):
+                    app.links["hud"].set_zone(0)
+                    self.ask = "buzzer" if name == "hot" else "lcd"
                 self.job = None
-        elif self.ask is None and self.status["leds"] and not self.status["buzzers"] and False:
-            pass
 
     def ask_text(self):
-        return {"wheels_l": "Did the LEFT wheels spin forward?", "wheels_r": "Did the RIGHT wheels spin forward?",
-                "leds": "Did the LEDs flash (red, blue, yellow)? Press Y for yes, N for no, then run test 5 again for the buzzers.",
-                "lcd": "Did the LCD show the warning text?"}.get(self.ask, "")
+        return {"wheels_l": "Did the LEFT wheel spin forward?", "wheels_r": "Did the RIGHT wheel spin forward?", "pan": "Did the camera pan both ways?",
+                "leds": "Did the yellow LED blink 5 times and the buzzer chirp?",
+                "buzzer": "Red LED and fast high beeps for hot? Then run test 7: blue LED and low beeps for cold. Y if both were right.",
+                "lcd": "Did the LCD show the warning and the OLED show hearts and samples?"}.get(self.ask, "")
 
     def draw(self, surf, app):
         title(surf, "HARDWARE CHECK", 90)
         snap = app.state.snapshot()
         y = 150
-        for key, label in (("pad", "Gamepad"), ("robot", "Robot (UNO Q #1)"), ("tower", "Tower (UNO Q #2)"),
-                           ("station", "Weather station (UNO R3)"), ("camera", "Camera")):
+        for key, label in (("pad", "Gamepad"), ("robot", "Rover (UNO Q, Wi-Fi)"), ("tower", "Tower (UNO Q, USB)"),
+                           ("hud", "HUD panel (UNO Q, USB)"), ("camera", "Camera")):
             conn, col, where, fw, rtt, loss, note, sim = snap[key]
             r = panel(surf, pygame.Rect(120, y, 1120, 66), 170, scan=False)
             dot(surf, (r.left + 30, r.centery), K.DOT[col], 9)
@@ -536,7 +501,7 @@ class HwCheckScreen:
             fonts.text(surf, "auto" if kind == "auto" else "you confirm", (x + 780, yy + 14), 15, K.DIM, anchor="midright")
         if self.ask:
             r = panel(surf, pygame.Rect(C.RENDER_W // 2 - 520, 380, 1040, 150), 245, edge=K.YELLOW, scan=False)
-            fonts.text(surf, self.ask_text(), (r.centerx, r.top + 50), 26, K.YELLOW, anchor="center")
+            fonts.text(surf, self.ask_text()[:90], (r.centerx, r.top + 50), 24, K.YELLOW, anchor="center")
             fonts.text(surf, "Y = yes     N = no", (r.centerx, r.top + 104), 30, K.WHITE, bold=True, anchor="center")
         elif self.job:
             fonts.text(surf, "running: %s ..." % self.job[0], (C.RENDER_W // 2, 520), 24, K.YELLOW, anchor="center")
@@ -551,6 +516,8 @@ class HwCheckScreen:
 
 
 class ResultsScreen:
+    """The debrief: time survived, samples by type, strikes, the meter that failed first, why it matters, the NASA data used."""
+
     def handle(self, app, a):
         if a in ("start", "confirm"):
             app.after_results()
@@ -561,85 +528,40 @@ class ResultsScreen:
     def draw(self, surf, app):
         res = app.last_results
         pygame.draw.rect(surf, (0, 0, 0), (0, 0, C.RENDER_W, C.RENDER_H))
-        title(surf, "ORBIT FAILED", 120, 96, K.RED)
-        fonts.text(surf, "Signal lost at T+ %s" % mmss(res["time"]), (C.RENDER_W // 2, 200), 28, K.GREY, anchor="center")
-        cols = (C.RENDER_W // 2 - 520, C.RENDER_W // 2 - 270, C.RENDER_W // 2 - 70, C.RENDER_W // 2 + 150, C.RENDER_W // 2 + 380)
-        for c, head in zip(cols, ("RUN", "TIME", "DEBRIS HITS", "ASTEROID HITS", "DODGED")):
-            fonts.text(surf, head, (c, 280), 20, K.GREY)
-        y = 320
-        for mode in ("MANUAL", "AUTO-PILOT"):
-            r = app.history.get(mode)
-            sel = mode == app.last_mode
-            vals = (mode, mmss(r["time"]), str(r["debris"]), str(r["asteroid"]), str(r["dodged"])) if r else (mode, "-", "-", "-", "-")
-            for c, v in zip(cols, vals):
-                fonts.text(surf, v, (c, y), 30, (K.YELLOW if sel else K.WHITE) if r else K.DIM, mono=True)
-            y += 52
-        fonts.text(surf, "best streak without a hit %s     best time %s" % (mmss(res["best_streak"]), mmss(C.BEST_TIME)),
-                   (C.RENDER_W // 2, y + 30), 24, K.CYAN, anchor="center")
-        fonts.text(surf, "Fly one run by hand and one with auto-pilot to compare.", (C.RENDER_W // 2, y + 80), 20, K.GREY, anchor="center")
+        cx = C.RENDER_W // 2
+        title(surf, "OUTPOST LOST", 110, 90, K.RED)
+        fonts.text(surf, "Time survived  %s" % mmss(res["time"]), (cx, 200), 34, K.WHITE, anchor="center")
+        s = res["samples"]
+        rows = (("Samples collected", "ice %d    regolith %d    mineral %d    (score %d)" % (s["ice"], s["regolith"], s["mineral"], res["score"])),
+                ("Asteroid hits", str(res["strikes"])),
+                ("Failed first", res["first_fail_label"].upper()))
+        for i, (k, v) in enumerate(rows):
+            fonts.text(surf, k, (cx - 40, 280 + i * 56), 28, K.GREY, anchor="topright")
+            fonts.text(surf, v, (cx + 10, 280 + i * 56), 28, K.RED if i == 2 else K.WHITE, bold=(i == 2), anchor="topleft")
+        CalibrateScreen.wrap(surf, res["why"], cx, 470, 1300, 28, K.YELLOW)
+        fonts.text(surf, "NASA data used this run", (cx, 590), 20, K.GREY, anchor="center")
+        for i, line in enumerate(res["nasa"] or ["none (no data files found in data/nasa)"]):
+            fonts.text(surf, line, (cx, 625 + i * 32), 22, K.CYAN, anchor="center")
         if int(now() * 2) % 2:
-            fonts.text(surf, "PRESS START", (C.RENDER_W // 2, y + 170), 48, K.YELLOW, bold=True, anchor="center")
-        fonts.text(surf, "Put the robot back on its start mark first.", (C.RENDER_W // 2, y + 225), 22, K.GREY, anchor="center")
+            fonts.text(surf, "Press Start or Enter to try again", (cx, C.RENDER_H - 160), 44, K.YELLOW, bold=True, anchor="center")
 
 
 class GameOverFX:
-    """Failed orbit, about 8 seconds: engine dies, tumble, the ring breaks, the craft falls to Earth and burns up."""
-    LENGTH = 10.5
+    """Failure sequence, 3 seconds: the rover goes dark and the screen fades out."""
+    LENGTH = 3.0
 
     def __init__(self, world_view, game, audio):
-        self.wv, self.t = world_view, 0.0
-        c = game.craft
-        self.x, self.y, self.h = c.x, c.y, c.theta
-        self.spin, self.fragmented, self.engine_fail_played = 40.0, False, False
-        self.audio = audio
-        self.spark_t = 0.0
+        self.wv, self.t, self.audio, self.first = world_view, 0.0, audio, game.first_fail_label if hasattr(game, "first_fail_label") else ""
+        self.fail = game.first_fail or ""
 
     def update(self, dt, game):
         self.t += dt
-        t, wv = self.t, self.wv
-        self.spin += 220 * dt
-        self.h += self.spin * dt
-        r = math.hypot(self.x, self.y) or 1.0
-        wv.ring_break = max(0.0, min(1.0, (t - 1.2) / 3.5))
-        if not self.engine_fail_played and t > 0.05:
-            self.engine_fail_played = True
-            self.audio.play("engine_fail")
-        if t < 3.2:                                                  # drift off the ring
-            self.x += self.x / r * 3.0 * dt
-            self.y += self.y / r * 3.0 * dt
-        elif not self.fragmented:                                    # gravity takes over
-            pull = 5 + 18 * (t - 3.2) ** 1.4
-            self.x -= self.x / r * pull * dt
-            self.y -= self.y / r * pull * dt
-            sx, sy = wv.px(self.x, self.y)
-            self.spark_t += dt
-            if self.spark_t > 0.02:
-                self.spark_t = 0
-                wv.parts.emit(sx, sy, 3, [K.ORANGE, K.YELLOW, K.WHITE], 90, (0.3, 0.8), (2, 4), drag=1.2)
-            if r < C.EARTH_R + 2.5:
-                self.fragmented = True
-                wv.parts.emit(sx, sy, 140, [K.ORANGE, K.YELLOW, K.WHITE, K.RED], 360, (0.6, 1.6), (2, 6), drag=1.8)
-                wv.parts.emit(sx, sy, 18, [(200, 200, 215)], 200, (0.8, 1.8), (4, 9), drag=1.0, kind="frag")
-                wv.parts.ring(sx, sy, 160, K.ORANGE, 0.9)
-                self.audio.play("burn")
-        return t > self.LENGTH
-
-    def scorch(self):
-        return max(0.0, min(1.0, (self.t - 3.2) / 2.0))
+        return self.t > self.LENGTH
 
     def draw(self, surf, game):
-        wv, t = self.wv, self.t
-        if not self.fragmented:
-            x, y = wv.px(self.x, self.y)
-            fl = random.random() * max(0.0, 1.0 - t / 1.2) if t < 1.2 and random.random() < 0.5 else 0.0
-            wv.ship.draw(surf, x, y, self.h, 0.0, C.CRAFT_R * wv.S, scorch=self.scorch(), flame_override=fl)
-        if t < 3.2 and int(t * 5) % 2 == 0:
-            fonts.text(surf, "MAIN ENGINE FAILURE", (C.RENDER_W // 2, 200), 64, K.RED, bold=True, anchor="center", shadow=True)
+        if int(self.t * 5) % 2 == 0 and self.t < 2.0:
+            fonts.text(surf, "%s FAILED" % (self.fail.upper() or "LIFE SUPPORT"), (C.RENDER_W // 2, 200), 64, K.RED, bold=True, anchor="center", shadow=True)
             pygame.draw.rect(surf, K.RED, (6, 6, C.RENDER_W - 12, C.RENDER_H - 12), 5)
-        if t > 6.5:
-            s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
-            s.fill((0, 0, 0, int(min(1.0, (t - 6.5) / 1.5) * 240)))
-            surf.blit(s, (0, 0))
-        if t > 7.5:
-            fonts.text(surf, "ORBIT FAILED", (C.RENDER_W // 2, C.RENDER_H // 2 - 40), 100, K.RED, bold=True, anchor="center")
-            fonts.text(surf, "Signal lost at T+ %s" % mmss(game.over_t), (C.RENDER_W // 2, C.RENDER_H // 2 + 40), 30, K.GREY, anchor="center")
+        s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
+        s.fill((0, 0, 0, int(min(1.0, self.t / self.LENGTH) * 255)))
+        surf.blit(s, (0, 0))

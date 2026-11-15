@@ -3,7 +3,7 @@ import collections
 import math
 import pygame
 from gfx import fonts, palette as K
-from gfx.ship import glow_sprite
+from gfx.rover import glow_sprite
 
 _panels = {}
 

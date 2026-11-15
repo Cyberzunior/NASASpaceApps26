@@ -1,4 +1,4 @@
-"""Turns tape-measure numbers into the model constants, and bearings into pan-servo angles."""
+"""Turns tape-measure numbers into the model constants."""
 import config as C
 
 
@@ -24,25 +24,8 @@ def retune_turn(w_measured, k_now, w_target=90.0):
 
 
 def sync_delay_from(one_way_ms):
-    """Delay for the screen craft so it lines up with the robot (0 below 15 ms: not worth it)."""
+    """Delay for the on-screen rover so it lines up with the real one (0 below 15 ms: not worth it)."""
     return 0 if one_way_ms is None or one_way_ms < 15 else int(round(one_way_ms))
-
-
-def aim_servo(bearing):
-    """Pan servo angle (0..180) that sends the ball `bearing` degrees off the tower-to-Earth line."""
-    table = sorted((float(b), float(s)) for b, s in C.AIM_TABLE) if C.AIM_TABLE else None
-    if table and len(table) >= 2:
-        if bearing <= table[0][0]:
-            (b0, s0), (b1, s1) = table[0], table[1]
-        elif bearing >= table[-1][0]:
-            (b0, s0), (b1, s1) = table[-2], table[-1]
-        else:
-            i = next(i for i in range(1, len(table)) if bearing <= table[i][0])
-            (b0, s0), (b1, s1) = table[i - 1], table[i]
-        servo = s0 + (s1 - s0) * (bearing - b0) / ((b1 - b0) or 1.0)
-    else:
-        servo = C.AIM_CENTER_DEG + C.AIM_GAIN * bearing
-    return int(round(max(0.0, min(180.0, servo))))
 
 
 def save(**values):

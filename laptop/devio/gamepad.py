@@ -88,7 +88,9 @@ class InputThread(threading.Thread):
                     self.state.cmd = cmd
                 t = now()
                 changed = self._last is None or abs(cmd[0] - self._last[0]) > C.CMD_EPS or abs(cmd[1] - self._last[1]) > C.CMD_EPS
-                if changed or t - self._t_send >= 1.0 / C.SEND_HZ:
+                if self.state.hold_commands:
+                    pass                                           # the intro: the rover hears nothing and stops by itself
+                elif changed or t - self._t_send >= 1.0 / C.SEND_HZ:
                     self._t_send, self._last = t, cmd
                     if self.robot.send_drive(cmd[2], cmd[3], int(self.state.ap_on)):
                         self.sent += 1

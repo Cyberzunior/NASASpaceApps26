@@ -81,6 +81,7 @@ def build():
     S["alarm"] = np.concatenate([tone(180, 0.35, 0.45, 0, "square"), tone(130, 0.35, 0.45, 0, "square")] * 3)
     S["burn"] = noise_burst(1.6, 0.4, 0.05, 3.0)
     S["pause"] = tone(500, 0.1, 0.3, -150)
+    S["pickup"] = np.concatenate([tone(880, 0.05, 0.35), tone(1320, 0.07, 0.35), tone(1760, 0.1, 0.3)])
     S["ready"] = np.concatenate([tone(523, 0.1, 0.35), tone(659, 0.1, 0.35), tone(784, 0.18, 0.35)])
     return S
 

@@ -139,7 +139,7 @@ SENSOR_TIMEOUT_S = 10.0       # no valid DHT11 reading for this long: simulated 
 # ---- Intro and misc
 SKIP_INTRO = False
 INTRO_S = 5.0
-RESTART_TO_PLAY = False
+RESTART_TO_PLAY = True
 BEST_TIME = 0.0
 MASTER_VOLUME = 0.7
 POSTFX = 2

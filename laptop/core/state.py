@@ -2,7 +2,7 @@
 import threading
 import config as C
 
-DEVICES = ("pad", "robot", "tower", "station", "camera")
+DEVICES = ("pad", "robot", "tower", "hud", "camera")
 
 
 class DeviceStatus:
@@ -53,8 +53,9 @@ class SharedState:
         self.drive_enabled = False       # False in menus, pause, game over: the robot gets zero
         self.ap_on = False
         self.ap_cmd = (0.0, 0.0)         # written by the auto-pilot at 60 Hz
-        self.turn_scale = 1.0            # weather penalty, applied before the mixer so both bodies get it
+        self.turn_scale = 1.0            # kept at 1.0, applied before the mixer so both bodies get it
         self.cmd = (0.0, 0.0, 0, 0)      # (speed, turn, left, right): the numbers both bodies use
+        self.hold_commands = False       # True during the intro: no wheel commands at all
         self.test_cmd = None             # (left, right) wheel test from Hardware Check / calibration, else None
         self.threads = {}                # name -> last heartbeat time, for the debug overlay
 

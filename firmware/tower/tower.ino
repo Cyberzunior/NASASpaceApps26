@@ -1,67 +1,73 @@
-// T-Minus_6 asteroid tower, firmware v2. Arduino UNO Q #2, microcontroller side. 3.3 V pins.
-//   in : F (fire one ball)  A,angle (pan servo)  X (disarm)  R (re-arm)  T,rest,push,ms (tune the pusher)
-//   out: K (ball released)
-// F is ignored when disarmed or within 1.5 s of the last fire. The three pusher numbers are NOT stored: the laptop
-// resends them (T,...) every time it connects. The test button on D2 fires too (and answers K, so the laptop sees it).
-// UNTESTED on hardware. Check: the Servo library works on the UNO Q core, and D9 / D10 can drive servos.
-#include <Arduino_RouterBridge.h>
+// T-Minus_6 asteroid tower, firmware v2. Arduino UNO Q, microcontroller side, 3.3 V pins. USB serial, 115200 baud
+// (the tower is wired to the laptop now). Protocol: laptop/devio/protocol.py.
+//   in : I?   P,seq,us (ping -> Q,seq,us)   F (one shot)   A,angle (pan servo)   X (disarm)   R (arm)   T,rest,push,ms (tune the pusher)
+//   out: I,tower,2   Q,seq,us   W,3 (warning: seconds until the ball is released)   K (ball released)
+// One shot = warn, fire, release: W,3 -> 3 s wait -> push the ball -> K. The test-fire button on D2 runs the SAME sequence and
+// sends the same lines, so the game shows the warning before the ball drops. F or the button is ignored when disarmed,
+// during a shot, or within MIN_GAP_MS of the last one. No delay(): everything runs on millis().
+// UNTESTED on hardware: check the Servo library on the UNO Q core and that D9 / D10 can drive servos.
 #include <Servo.h>
 #define FW_VERSION 2
 #define HAS_PAN 1                         // 1 once the second SG90 (pan) is fitted
 
 const int PUSH_PIN = 9, PAN_PIN = 10, LED = 13, BTN = 2;
-const unsigned long MIN_GAP_MS = 1500;
-int restDeg = 20, pushDeg = 100;          // tune: how far the pusher swings to release one ball
+const unsigned long MIN_GAP_MS = 1500, WARN_MS = 3000;
+int restDeg = 20, pushDeg = 100;
 unsigned long pushMs = 350;
 
 Servo pusher;
 #if HAS_PAN
 Servo pan;
 #endif
-bool armed = true, pushing = false;
-unsigned long tPush = 0, tFire = 0, tBtn = 0;
-volatile bool pendingF = false, pendingX = false, pendingR = false, pendingA = false, pendingT = false;
-volatile int newAngle = 90, tRest = 20, tPushDeg = 100;
-volatile long tMs = 350;
+enum Phase { IDLE, WARNING, PUSHING } phase = IDLE;
+bool armed = true;
+unsigned long tPhase = 0, tFire = 0, tBtn = 0;
+char rx[64];
+byte rxLen = 0;
 
-void onLine(String s) {                   // sets flags only; loop() does the work
-  if (s == "F") pendingF = true;
-  else if (s == "X") pendingX = true;
-  else if (s == "R") pendingR = true;
-  else if (s.startsWith("A,")) { newAngle = constrain(s.substring(2).toInt(), 0, 180); pendingA = true; }
-  else if (s.startsWith("T,")) {
-    int a = s.indexOf(',', 2), b = s.indexOf(',', a + 1);
-    if (a > 0 && b > 0) { tRest = s.substring(2, a).toInt(); tPushDeg = s.substring(a + 1, b).toInt(); tMs = s.substring(b + 1).toInt(); pendingT = true; }
+void startShot(unsigned long now) {
+  if (!armed || phase != IDLE || (tFire != 0 && now - tFire < MIN_GAP_MS)) return;
+  Serial.println("W,3");                    // warn first
+  phase = WARNING; tPhase = now; tFire = now;
+}
+
+void handleLine(char* s) {
+  if (!strcmp(s, "I?")) Serial.println("I,tower,2");
+  else if (s[0] == 'P' && s[1] == ',') { Serial.print("Q"); Serial.println(s + 1); }
+  else if (!strcmp(s, "F")) startShot(millis());
+  else if (!strcmp(s, "X")) armed = false;
+  else if (!strcmp(s, "R")) armed = true;
+#if HAS_PAN
+  else if (s[0] == 'A' && s[1] == ',') pan.write(constrain(atoi(s + 2), 0, 180));
+#endif
+  else if (s[0] == 'T' && s[1] == ',') {
+    char* a = strchr(s + 2, ','); char* b = a ? strchr(a + 1, ',') : 0;
+    if (a && b) { restDeg = constrain(atoi(s + 2), 0, 180); pushDeg = constrain(atoi(a + 1), 0, 180); pushMs = constrain(atol(b + 1), 100, 1500); if (phase != PUSHING) pusher.write(restDeg); }
   }
 }
-void send(const String& s) { Bridge.notify("mcu_line", s); }
 
-void fire(unsigned long now) {
-  if (!armed || pushing || (tFire != 0 && now - tFire < MIN_GAP_MS)) return;
-  pusher.write(pushDeg); pushing = true; tPush = now; tFire = now;
-  send("K");
-}
 void setup() {
+  Serial.begin(115200);
   pinMode(LED, OUTPUT); pinMode(BTN, INPUT_PULLUP);
   pusher.attach(PUSH_PIN); pusher.write(restDeg);
 #if HAS_PAN
   pan.attach(PAN_PIN); pan.write(90);
 #endif
-  Bridge.begin();
-  Bridge.provide_safe("line", onLine);
 }
+
 void loop() {
   unsigned long now = millis();
-  if (pendingT) { pendingT = false; restDeg = constrain(tRest, 0, 180); pushDeg = constrain(tPushDeg, 0, 180); pushMs = constrain(tMs, 100, 1500); if (!pushing) pusher.write(restDeg); }
-  if (pendingX) { pendingX = false; armed = false; }
-  if (pendingR) { pendingR = false; armed = true; }
-#if HAS_PAN
-  if (pendingA) { pendingA = false; pan.write(newAngle); }
-#else
-  pendingA = false;
-#endif
-  if (pendingF) { pendingF = false; fire(now); }
-  if (pushing && now - tPush > pushMs) { pusher.write(restDeg); pushing = false; }
-  if (digitalRead(BTN) == LOW && now - tBtn > 500) { tBtn = now; fire(now); }   // test-fire button
-  digitalWrite(LED, armed);
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n') { rx[rxLen] = 0; if (rxLen) handleLine(rx); rxLen = 0; }
+    else if (c != '\r' && rxLen < sizeof(rx) - 1) rx[rxLen++] = c;
+  }
+  if (phase == WARNING && now - tPhase >= WARN_MS) {          // warning over: release the ball
+    pusher.write(pushDeg); phase = PUSHING; tPhase = now;
+    Serial.println("K");
+  } else if (phase == PUSHING && now - tPhase > pushMs) {
+    pusher.write(restDeg); phase = IDLE;
+  }
+  if (digitalRead(BTN) == LOW && now - tBtn > 500) { tBtn = now; startShot(now); }   // test-fire: same warn, fire, release
+  digitalWrite(LED, phase == WARNING ? (now / 150) % 2 : armed);                      // blinks during the warning
 }

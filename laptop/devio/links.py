@@ -151,21 +151,32 @@ class Link:
 
 
 class RobotLink(Link):
+    """The rover over Wi-Fi (UDP). Pings P/Q for health. Every wheel value is already scaled to MAX_PWM by the mixer."""
     role = "robot"
 
     def __init__(self, *a):
         super().__init__(*a)
         self.latched = False
         self.latch_confirmed = False
-        self.front_stop = False
+        self.front_stop = False            # kept for the simulators: there is no distance sensor any more
         self.last_drive = None
+        self.pan_deg = 0
         self._t_x = 0.0
 
     def send_drive(self, left, right, ap):
         if self.latched:
             return False
+        if C.INVERT_LEFT:
+            left = -left
+        if C.INVERT_RIGHT:
+            right = -right
         self.last_drive = (left, right, ap)
         return self.send(P.encode("D", int(left), int(right), int(ap)))
+
+    def pan(self, deg):
+        """Camera pan target, degrees, limited to PAN_LIMIT_DEG each side. 0 is the power-up direction."""
+        self.pan_deg = int(max(-C.PAN_LIMIT_DEG, min(C.PAN_LIMIT_DEG, deg)))
+        return self.send(P.encode("C", self.pan_deg))
 
     def latch(self, on):
         self.latched, self.latch_confirmed = on, False
@@ -175,30 +186,24 @@ class RobotLink(Link):
     def tick(self):
         super().tick()
         t = now()
-        if self.latched and not self.latch_confirmed and t - self._t_x >= 0.2:     # 5 per second until confirmed
+        if self.latched and not self.latch_confirmed and t - self._t_x >= 0.5:     # repeat X until the rover is quiet
             self._t_x = t
             self.send("X")
 
     def handle(self, msg):
-        k = msg[0]
-        if k == "S":
-            self.front_stop = bool(msg[3] & 1)
-            if msg[3] & 2 and self.latched:
-                self.latch_confirmed = True
-            self.bus.post("scan", msg[1], msg[2], msg[3])
-        elif k == "B":
+        if msg[0] == "B":
             self.bus.post("bumper", msg[1])
-        elif k == "T":
-            self.bus.post("robot_air", msg[1], msg[2])
 
     def resync(self):
         self.send("X" if self.latched else "R")
+        self.send(P.encode("C", self.pan_deg))
 
     def on_lost(self):
         self.front_stop = False
 
 
 class TowerLink(Link):
+    """The asteroid tower over USB serial. F asks for a shot; the tower answers W,3 (warning), fires, then K."""
     role = "tower"
 
     def __init__(self, *a):
@@ -207,7 +212,6 @@ class TowerLink(Link):
         self.allowed = False
         self.last_fire = -99.0
         self.last_k = -99.0
-        self.last_aim = None
 
     def allow(self, ok):
         self.allowed = ok
@@ -220,63 +224,58 @@ class TowerLink(Link):
         return self.connected and self.armed and self.allowed and now() - self.last_fire >= C.TOWER_MIN_FIRE_GAP_S
 
     def fire(self, test=False):
-        """Safety: only while flying (allowed), armed, and 2 s after the previous F. test=True is the Hardware
-        Check button, which still needs the tower armed and the 2 s gap."""
+        """Safety: only while playing (allowed), armed, and 2 s after the previous F."""
         if not (self.connected and self.armed and (self.allowed or test)) or now() - self.last_fire < C.TOWER_MIN_FIRE_GAP_S:
             return False
         self.last_fire = now()
         return self.send("F")
 
-    def aim(self, angle):
-        self.last_aim = int(angle)
-        return self.send(P.encode("A", int(angle)))
-
     def tune(self, rest, push, ms):
         return self.send(P.encode("T", int(rest), int(push), int(ms)))
 
     def handle(self, msg):
-        if msg[0] == "K":
+        if msg[0] == "WARN":
+            self.bus.post("tower_warn", msg[1])
+        elif msg[0] == "K":
             self.last_k = now()
             self.bus.post("tower_k")
 
     def resync(self):
         self.tune(C.TOWER_REST_DEG, C.TOWER_PUSH_DEG, C.TOWER_PUSH_MS)
         self.send("R" if self.armed else "X")
-        if C.TOWER_HAS_PAN:
-            self.aim(self.last_aim if self.last_aim is not None else int(C.AIM_CENTER_DEG))
 
 
-class StationLink(Link):
-    """The weather station (UNO R3) over USB serial. No ping: it streams W every 2 s, so silence for 5 s = lost."""
-    role = "station"
-    timeout = 5.0
+class HudLink(Link):
+    """The HUD panel (UNO Q) over USB serial: LCD, OLED, LEDs, buzzer, DHT11. Same ping scheme as the other links,
+    so a pulled cable or a dead board shows as lost within LINK_TIMEOUT_S."""
+    role = "hud"
+    METER_HZ = 5.0
 
     def __init__(self, *a):
         super().__init__(*a)
         self.zone = 0
         self.lives = C.LIVES
+        self.samples = 0
         self.over = False
+        self.meters = None
+        self._sent = None
+        self._t_meters = 0.0
         self._zone_sent, self._t_zone = None, 0.0
-        self.swing = None                  # C, from the NASA flare under the pot; None = never sent
+        self.last_w = None
 
     def tick(self):
+        super().tick()
         t = now()
-        with self.lock:
-            best = self.best()
-        if best is not None and (self._zone_sent != self.zone or t - self._t_zone >= C.ZONE_KEEPALIVE_S):
-            self._zone_sent, self._t_zone = self.zone, t
-            self.send(P.encode("Z", self.zone))
-        up = best is not None
-        if up != self.connected:
-            self.connected = up
-            self.bus.post("device_up" if up else "device_down", self.role)
-            self.log("station %s" % ("connected on " + best.name if up else "lost"))
-            if up:
-                self.resync()
-        with self.state.lock:
-            d = self.state.devices["station"]
-            d.connected, d.where = up, best.name if best else "searching"
-            d.fw, d.rtt_ms = (best.fw if best else None), None
+        if self.connected:
+            if self._zone_sent != self.zone or t - self._t_zone >= 2.0:
+                self._zone_sent, self._t_zone = self.zone, t
+                self.send(P.encode("Z", self.zone))
+            if self.meters is not None and self.meters != self._sent and t - self._t_meters >= 1.0 / self.METER_HZ:
+                self._t_meters, self._sent = t, self.meters
+                self.send(P.encode("M", *self.meters))
+
+    def set_meters(self, power, oxygen, food, shield):
+        self.meters = tuple(int(round(max(0, min(100, v)))) for v in (power, oxygen, food, shield))
 
     def set_zone(self, z):
         self.zone = int(z)
@@ -285,27 +284,37 @@ class StationLink(Link):
         self.lives = n
         return self.send(P.encode("H", n))
 
+    def set_samples(self, n):
+        self.samples = n
+        return self.send(P.encode("E", n))
+
+    def pickup(self):
+        return self.send("P")
+
+    def chirp(self):
+        return self.send("BZ")
+
+    def text(self, line1, line2=""):
+        return self.send(P.encode("L", "%s|%s" % (line1[:16], line2[:16])))
+
+    def clear_text(self):
+        return self.send("L,")
+
     def game_over(self):
         self.over = True
         return self.send("G")
 
     def reset(self):
-        self.over, self.lives = False, C.LIVES
+        self.over, self.lives, self.samples, self._sent = False, C.LIVES, 0, None
         return self.send("R")
-
-    def set_swing(self, c):
-        if c != self.swing:
-            self.swing = c
-            self.send(P.encode("Y", "%.1f" % c))
 
     def virtual_temp(self, c):
         return self.send(P.encode("V", "%.1f" % c))
 
     def handle(self, msg):
         if msg[0] == "W":
-            self.bus.post("weather", msg[1], msg[2], msg[3])
-        elif msg[0] == "N":
-            self.bus.post("pot", msg[1], msg[2] / 10.0)
+            self.last_w = now()
+            self.bus.post("hud_temp", msg[1], msg[2], msg[3])
 
     def resync(self):
         if self.over:
@@ -313,9 +322,8 @@ class StationLink(Link):
         else:
             self.send("R")
             self.send(P.encode("H", self.lives))
-        if self.swing is not None:
-            self.send(P.encode("Y", "%.1f" % self.swing))
-        self._zone_sent = None
+            self.send(P.encode("E", self.samples))
+        self._zone_sent, self._sent = None, None
 
 
 def link_thread(links, stop, state):

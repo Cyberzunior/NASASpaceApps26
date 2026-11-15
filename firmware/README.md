@@ -2,36 +2,31 @@
 
 | Folder | Board | Files |
 |---|---|---|
-| `weather_station/` | ELEGOO UNO R3 (USB to the laptop) | `weather_station.ino` |
-| `robot/` | Arduino UNO Q #1 | `robot.ino` (STM32 side), `linux_bridge/robot_bridge.py` (Linux side) |
-| `tower/` | Arduino UNO Q #2 | `tower.ino`, `linux_bridge/tower_bridge.py` |
+| `hud_panel/` | UNO Q, USB to the laptop | `hud_panel.ino` |
+| `tower/` | UNO Q, USB to the laptop | `tower.ino` |
+| `robot/` | UNO Q, Wi-Fi | `robot.ino` (STM32 side), `linux_bridge/robot_bridge.py` (UDP <-> Bridge), `linux_bridge/camera_stream.py` (C920 MJPEG) |
 
-**None of this has been compiled or run on a board yet.** Every sketch is written against the pin maps in `docs/pin_map.md`.
+**None of this has been compiled or run on a board yet.** Pins: `docs/pin_map.md`. Protocol: `laptop/devio/protocol.py`
+(ASCII lines, same as the triage suite: serial 115200 baud or one UDP datagram per line; ping `P,seq,us` answered `Q,seq,us`;
+serial boards answer `I?` with `I,<role>,2`).
 
-## Weather station (UNO R3)
-Libraries: none for the weather station now (no DHT11). For the lives display later: LiquidCrystal I2C (Frank de Brabander) and `#define HAS_LIVES_LCD 1`.
-Replies to `I?` with `I,weather,2`, sends `W,temp,hum,state` every 2 s and at once on every state change.
+## HUD panel
+Libraries: LiquidCrystal, DHT sensor library, Adafruit SSD1306, Adafruit GFX. Lines in: `M,pwr,o2,food,shield`, `H,hearts`, `E,samples`,
+`Z,state`, `V,tempC`, `P` (pickup: yellow LED 5 blinks in 1 s, chirp), `BZ`, `G`, `R`, `L,line1|line2`. Out: `W,temp,hum,state` every 2 s
+(hum -1 = the board is repeating a laptop `V` value because its DHT11 is dead). One passive buzzer on D7 via `tone()`.
 
-## UNO Q: how the two halves talk
-```
-laptop --UDP 5005--> robot_bridge.py --Bridge "line"--> robot.ino
-laptop <--UDP------- robot_bridge.py <--Bridge "mcu_line"-- robot.ino
-```
-An Arduino App Lab app has a sketch and a Python part. Put `robot.ino` as the sketch and `robot_bridge.py` as the Python
-`main.py` of one App, and the same for the tower. Then set the App to start when the board powers on (App Lab: "Running an App at Startup").
-The sketches need the Arduino_RouterBridge library (comes with the UNO Q core) and `AccelStepper` (robot) / `Servo` (tower).
+## Tower
+`F` or the test button on D2: `W,3` (warning), 3 s wait, push the ball, `K`. Disarmed (`X`) or within 1.5 s of the last shot = ignored.
 
-Test a bridge on a PC without a board: `python firmware/robot/linux_bridge/robot_bridge.py --selftest`.
+## Rover
+Two DRV8833 channels (D5 D6 left, D9 D10 right), `MAX_PWM` scaling happens on the laptop. `D,left,right,ap` every 20 ms, wheels stop 300 ms after the
+last `D` (`stopAll()`), `C,angle` pans the camera stepper (AccelStepper, +-90 degrees), `X` latch on game over, `R` release.
+On the UNO Q's Linux side run `linux_bridge/robot_bridge.py` (UDP port 5005, Wi-Fi) and `linux_bridge/camera_stream.py` (HTTP port 8080).
+Test the bridge without a board: `python firmware/robot/linux_bridge/robot_bridge.py --selftest`.
 
 ## Verify on day one (not checked against a real board)
-1. The Bridge API names: Python `from arduino.app_utils import App, Bridge`, `Bridge.notify`, `Bridge.provide`; sketch `Bridge.begin`, `Bridge.provide_safe`, `Bridge.notify`. They come from community write-ups; confirm against the current Arduino UNO Q docs.
-2. Pins **D3, D5, D6, D9 give PWM** (the pinout lists D3 D5 D6 D9 D10 D11). If any does not, tell the team before wiring.
-3. The `Servo` library runs on the UNO Q core and D9 / D10 can drive servos.
-4. How the ultrasonic echo pin A1 behaves: `robot.ino` polls it (no interrupt), so expect about 1 to 2 cm of error. A0 and A1 are not 5 V tolerant: keep the 1k + 2k divider.
-5. Real turret scan rate: the stepper at 700 steps/s sweeps 5 degrees in about 80 ms, plus 60 ms per ping, so expect 7 to 8 readings a second, not 15.
-6. Wi-Fi power saving: the bridge tries `iw dev wlan0 set power_save off`; check the interface name on your board. The UNO Q Wi-Fi is dual band (2.4 / 5 GHz): use the 2.4 GHz hotspot anyway.
-7. If the Bridge is awkward: plug a USB-C data cable between the laptop and the UNO Q. The game's serial scan speaks the same lines if the board answers `I?` (the sketch would then need a `Serial` front end).
-
-## Behaviour that must survive a Wi-Fi drop
-Robot: wheels stop 300 ms after the last `D`, the turret parks and the LED blinks slowly after 2 s, a game-over latch ignores all `D` until `R`.
-Tower: ignores `F` when disarmed or within 1.5 s of the last fire.
+1. D5, D6, D9, D10 give PWM, and `analogWrite()` works without `pinMode()` on them (forum reports: `pinMode()` can break it; PWM on one pin can disable other GPIO).
+2. `tone()` works on the UNO Q core (HUD buzzer on D7). The LCD1602 and DHT11 work from the UNO Q's supply at 3.3 V logic.
+3. The tower and HUD panel appear as a USB serial port and answer `I?` (the sketches use `Serial`); the Arduino Bridge API names for the rover come from community write-ups.
+4. The `Servo` library runs on the UNO Q core and D9 / D10 can drive servos.
+5. Wi-Fi power saving on the rover: the bridge tries `iw dev wlan0 set power_save off`; check the interface name.
