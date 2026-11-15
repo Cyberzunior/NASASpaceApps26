@@ -42,6 +42,17 @@ def save(name, data):
         f.write(data)
 
 
+def default_key():
+    """--key, else $NASA_API_KEY, else NASA_API_KEY in laptop/config.local.json (git-ignored), else DEMO_KEY."""
+    if os.environ.get("NASA_API_KEY"):
+        return os.environ["NASA_API_KEY"]
+    try:
+        with open(os.path.join(ROOT, "laptop", "config.local.json"), encoding="utf-8") as f:
+            return json.load(f).get("NASA_API_KEY") or "DEMO_KEY"
+    except (OSError, ValueError):
+        return "DEMO_KEY"
+
+
 def today():
     return datetime.date.today().isoformat()
 
@@ -208,7 +219,7 @@ def write_sources():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--key", default=os.environ.get("NASA_API_KEY", "DEMO_KEY"))
+    ap.add_argument("--key", default=default_key())
     ap.add_argument("--only", default="donki,diviner,meo,veggie")
     a = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
