@@ -67,7 +67,7 @@ def local_ip():
 
 
 class RelayBridge:
-    def __init__(self, port=PORT, hello_to=None, bridge=None, ip=None):
+    def __init__(self, port=PORT, hello_to=None, bridge=None, ip=None, broadcast=True):
         self.bridge = bridge or Bridge
         self.ip = ip or local_ip()
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -81,6 +81,7 @@ class RelayBridge:
         self.lock = threading.Lock()                     # one thread at a time talks to the Bridge
         self.stop = threading.Event()
         self.hello_to = hello_to                         # tests: extra HELLO target
+        self.broadcast = broadcast                       # tests: off so a running game cannot find this bridge
         self.bridge.provide("mcu_line", self.on_mcu_line)
 
     # ---- sketch -> laptop (runs on the Bridge's own thread: only sendto here, never Bridge.call)
@@ -144,17 +145,14 @@ class RelayBridge:
 
     def hello_loop(self):
         a, b, c, _ = (self.ip.split(".") + ["0"] * 4)[:4]
-        targets = ["255.255.255.255", "%s.%s.%s.255" % (a, b, c)]
+        targets = ["255.255.255.255", "%s.%s.%s.255" % (a, b, c)] if self.broadcast else []
+        if self.hello_to:
+            targets.append(self.hello_to)
         while not self.stop.is_set():
             msg = ("HELLO,%s,%d,%s\n" % (ROLE, FW, self.ip)).encode()
             for t in targets:
                 try:
-                    self.sock.sendto(msg, (t, PORT))
-                except OSError:
-                    pass
-            if self.hello_to:
-                try:
-                    self.sock.sendto(msg, self.hello_to)
+                    self.sock.sendto(msg, (t, PORT) if isinstance(t, str) else t)
                 except OSError:
                     pass
             self.stop.wait(1.0)
@@ -176,7 +174,7 @@ def wifi_full_speed():
 
 def selftest():
     fake = _FakeBridge() if REAL else Bridge
-    rb = RelayBridge(port=0, bridge=fake, ip="127.0.0.1")
+    rb = RelayBridge(port=0, bridge=fake, ip="127.0.0.1", broadcast=False)   # silent: a running game must not find it
     rb.start()
     t = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     t.settimeout(1.0)
@@ -201,9 +199,13 @@ def selftest():
     if LATEST:
         for i in range(20):
             t.sendto(("D,%d,%d,0\n" % (i, i)).encode(), dst)
-        time.sleep(0.2)
-        ds = [a[1] for a in fake.sent if a[0] == "line" and a[1].startswith("D,")]
-        check("newest D wins, old ones are dropped (%d of 20 sent on)" % len(ds), ds and ds[-1] == "D,19,19,0" and len(ds) < 20)
+        deadline, ds = time.time() + 1.0, []          # poll: fixed sleeps race under CPU load
+        while time.time() < deadline:
+            ds = [a[1] for a in fake.sent if a[0] == "line" and a[1].startswith("D,")]
+            if ds and ds[-1] == "D,19,19,0":
+                break
+            time.sleep(0.02)
+        check("newest D wins, old ones are dropped (%d of 20 sent on)" % len(ds), bool(ds) and ds[-1] == "D,19,19,0" and len(ds) < 20)
     fake.provided["mcu_line"]("B,L")
     check("a line from the sketch reaches the laptop", t.recvfrom(100)[0].startswith(b"B,L"))
     time.sleep(2.2)

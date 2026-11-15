@@ -27,8 +27,10 @@ class Diviner:
     def __init__(self, site=None):
         self.ok, self.t_min, self.t_max, self.table = False, -170.0, 115.0, []
         pts = []
+        fname = "diviner_%s.csv" % (site or C.DIVINER_SITE)
+        self.fetched = FETCHED.get(fname)
         try:
-            with open(os.path.join(DATA, "diviner_%s.csv" % (site or C.DIVINER_SITE)), encoding="utf-8") as f:
+            with open(os.path.join(DATA, fname), encoding="utf-8") as f:
                 for r in csv.DictReader(f):
                     if r["tbol_C"] != "":
                         pts.append((float(r["local_time_h"]), float(r["tbol_C"])))
@@ -74,12 +76,34 @@ def _date(text):
         return None
 
 
+def _sources_fetched():
+    """File name -> 'Fetched' date, read from data/nasa/SOURCES.md: how old the data the game runs on is."""
+    out, name = {}, None
+    try:
+        with open(os.path.join(DATA, "SOURCES.md"), encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if s.startswith("## "):
+                    name = s[3:].strip()
+                elif s.startswith("- Fetched:") and name:
+                    d = _date(s[len("- Fetched:"):].strip())
+                    if d:
+                        out[name] = str(d)
+    except OSError:
+        pass
+    return out
+
+
+FETCHED = _sources_fetched()
+
+
 class Storms:
     """Real DONKI events in date order: solar flares (class C/M/X) and SEP events."""
     SOURCE = "NASA DONKI"
 
     def __init__(self):
         self.events = []
+        self.fetched = FETCHED.get("donki_flr.json") or FETCHED.get("donki_sep.json")
         flr = _json("donki_flr.json")
         for e in (flr or {}).get("events", []):
             cls = str(e.get("classType") or "")
@@ -102,6 +126,7 @@ class Impacts:
 
     def __init__(self):
         raw = (_json("meo_impacts.json") or {}).get("impacts", [])
+        self.fetched = FETCHED.get("meo_impacts.json")
         self.events = [e for e in raw if _date(e.get("date"))]
         self.ok = len(self.events) >= 5
 
@@ -118,6 +143,7 @@ class Veggie:
 
     def __init__(self):
         d = _json("veggie_facts.json")
+        self.fetched = FETCHED.get("veggie_facts.json")
         self.ok = bool(d and d.get("days_to_harvest") and d.get("power_watts"))
         self.crop = (d or {}).get("crop", "")
         self.days = (d or {}).get("days_to_harvest", 0)
@@ -134,14 +160,16 @@ class Nasa:
         self.diviner, self.storms, self.impacts, self.veggie = Diviner(), Storms(), Impacts(), Veggie()
 
     def used(self):
-        """The datasets that really drive the game this run (for the debrief)."""
+        """The datasets that really drive the game this run, with how old the data is (for the debrief)."""
+        def tag(f):
+            return " (data fetched %s)" % f if f else ""
         out = []
         if self.storms.ok:
-            out.append("NASA DONKI: solar flares and SEP events (radiation storms)")
+            out.append("NASA DONKI: solar flares and SEP events (radiation storms)%s" % tag(self.storms.fetched))
         if self.diviner.ok:
-            out.append("NASA LRO Diviner: lunar surface temperatures")
+            out.append("NASA LRO Diviner: lunar surface temperatures%s" % tag(self.diviner.fetched))
         if self.impacts.ok:
-            out.append("NASA lunar impact monitoring: impact flashes (asteroid strikes)")
+            out.append("NASA lunar impact monitoring: impact flashes (asteroid strikes)%s" % tag(self.impacts.fetched))
         if self.veggie.ok:
-            out.append("NASA Veggie: ISS plant growth (greenhouse)")
+            out.append("NASA Veggie: ISS plant growth (greenhouse)%s" % tag(self.veggie.fetched))
         return out

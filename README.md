@@ -34,6 +34,8 @@ them in `laptop/config.local.json`. Status: green connected, grey not connected,
 ## NASA data (all on disk, the game never needs the internet)
 `python tools/fetch_nasa_data.py` fills `data/nasa/` (DONKI flares and SEP events, LRO Diviner temperatures, MEO lunar impact
 flashes, ISS Veggie facts) and writes `data/nasa/SOURCES.md`. Set `NASA_API_KEY` in `config.local.json` (DEMO_KEY is rate limited).
+Demo-day habit: rerun `python tools/fetch_nasa_data.py --only donki` in the morning so the radiation storms replay the freshest
+events; the debrief shows the fetched date next to each dataset, so a stale file is visible to judges.
 
 ## What is in this repo
 | Folder | What |
