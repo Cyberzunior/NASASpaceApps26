@@ -5,7 +5,9 @@ import collections
 import threading
 import config as C
 from core.clock import now, now_us
+from core.tower_aim import servo_for
 from devio import protocol as P
+from devio.hud_render import HudRenderer
 
 
 class Transport:
@@ -162,6 +164,8 @@ class RobotLink(Link):
         self.last_drive = None
         self.pan_deg = 0
         self._t_x = 0.0
+        self.ap_last = False
+        self._led_sent = None
 
     def send_drive(self, left, right, ap):
         if self.latched:
@@ -171,6 +175,7 @@ class RobotLink(Link):
         if C.INVERT_RIGHT:
             right = -right
         self.last_drive = (left, right, ap)
+        self.ap_last = bool(ap)
         return self.send(P.encode("D", int(left), int(right), int(ap)))
 
     def pan(self, deg):
@@ -189,12 +194,21 @@ class RobotLink(Link):
         if self.latched and not self.latch_confirmed and t - self._t_x >= 0.5:     # repeat X until the rover is quiet
             self._t_x = t
             self.send("X")
+        if self.connected:                                   # the status LED meaning is the laptop's: 2 game over, 1 auto-pilot, 0 off
+            mode = 2 if self.latched else (1 if self.ap_last else 0)
+            if mode != self._led_sent:
+                self._led_sent = mode
+                self.send(P.encode("LED", mode))
 
     def handle(self, msg):
         if msg[0] == "B":
             self.bus.post("bumper", msg[1])
 
     def resync(self):
+        """Connected (or reconnected): the settings go to the board first, then the latch state and the camera."""
+        self.send(P.encode("G", C.MAX_PWM, C.ROVER_MIN_PWM, C.ROVER_SLEW, C.ROVER_CMD_TIMEOUT_MS, C.PAN_LIMIT_DEG,
+                           int(round(C.PAN_SPEED_DEG_S * 4096.0 / 360.0)), C.ROVER_PAN_ACC_STEPS))
+        self._led_sent = None
         self.send("X" if self.latched else "R")
         self.send(P.encode("C", self.pan_deg))
 
@@ -203,163 +217,194 @@ class RobotLink(Link):
 
 
 class TowerLink(Link):
-    """The asteroid tower (UNO R3) over USB serial. F,bearing runs one sequence: the stepper yaws the laser to the bearing, the servo
-    pitches it down onto the floor, the tower answers W,3, and 3 s later K,1 (hit) or K,0 (miss; always K,0 at large bearings,
-    where the fixed sensor cannot check, so the game applies its own hit rule). Z sends the beam back up and yaw to 0, R asks for one
-    distance reading (answered R,cm). The tower answers pings during a sequence, so it never shows as lost."""
+    """The asteroid tower (UNO R3) over USB serial: a plain pan/tilt laser. tower.ino is flashed once and only moves and measures;
+    the laptop works out every angle (core/tower_aim.py) and sends Y,deg (yaw) and T,deg (servo). The tower answers D when both
+    motors arrive, R,cm for a distance, S for its state, and it answers pings while moving, so it never shows as lost."""
     role = "tower"
 
     def __init__(self, *a):
         super().__init__(*a)
-        self.armed = True                  # laptop side only (emergency stop): the tower has no armed state
+        self.armed = True                  # laptop side only (emergency stop)
         self.allowed = False
-        self.last_fire = -99.0
-        self.last_k = -99.0
         self.last_range = None
+        self.last_d = -99.0                # when the last D arrived
+        self.state = None                  # the last S line: (yaw, servo, laser, moving)
+        self.driver_ok = None              # None = asking, True = the v3 firmware answered, False = it did not
+        self._sent = (None, None)          # the last yaw / below that went out
+        self._t_aim = 0.0
+        self._t_up = 0.0
+        self._steps = []                   # timed test moves: (time, yaw, below or None for idle)
 
     def allow(self, ok):
-        self.allowed = ok
+        was, self.allowed = self.allowed, ok
+        if was and not ok:
+            self.idle()
 
     def set_armed(self, on):
         self.armed = on
         if not on:
-            self.send("Z")                 # emergency stop: beam back up
+            self._steps = []
+            self.idle()                    # emergency stop: beam back up
 
-    def can_fire(self):
-        return self.connected and self.armed and self.allowed and not self.cooling()
-
-    def cooling(self):
-        """True while the tower rests: 2 s after any F, and TOWER_COOLDOWN_S after its last K."""
-        t = now()
-        return t - self.last_fire < C.TOWER_MIN_FIRE_GAP_S or t - self.last_k < C.TOWER_COOLDOWN_S
-
-    def cooldown_left(self):
-        t = now()
-        return max(0.0, C.TOWER_COOLDOWN_S - (t - self.last_k), C.TOWER_MIN_FIRE_GAP_S - (t - self.last_fire))
-
-    def fire(self, test=False, bearing=0):
-        """F,bearing: the tower yaws to the bearing (whole degrees, -40 left .. 40 right), pitches the beam down and warns.
-        Safety: only while playing (allowed) or as a test shot, and never while the tower cools down."""
-        if not (self.connected and self.armed and (self.allowed or test)) or self.cooling():
+    # ---- moving
+    def aim(self, yaw, below=None, force=False):
+        """Point at yaw degrees (positive right of the tower's forward) and `below` degrees under level (None: leave the pitch).
+        Quiet: changes under TOWER_MIN_STEP_DEG are not sent and updates are spaced 1 / TOWER_TRACK_HZ apart."""
+        if not (self.connected and self.armed):
             return False
-        self.last_fire = now()
-        b = int(round(max(-C.ASTEROID_CONE_DEG, min(C.ASTEROID_CONE_DEG, bearing))))
-        return self.send("F,%d" % b)
+        yaw = max(-C.TOWER_YAW_LIMIT_DEG, min(C.TOWER_YAW_LIMIT_DEG, yaw))
+        with self.lock:
+            ly, lb = self._sent
+            ch_y = ly is None or abs(yaw - ly) >= C.TOWER_MIN_STEP_DEG
+            ch_b = below is not None and (lb is None or abs(below - lb) >= C.TOWER_MIN_STEP_DEG)
+            t = now()
+            if not (ch_y or ch_b) or (not force and t - self._t_aim < 1.0 / C.TOWER_TRACK_HZ):
+                return True
+            self._t_aim = t
+            ok = True
+            if ch_y:
+                ok &= self.send(P.encode("Y", round(C.TOWER_YAW_DIR * yaw, 1)))
+                ly = yaw
+            if ch_b:
+                ok &= self.send(P.encode("T", int(round(max(0, min(180, servo_for(below)))))))
+                lb = below
+            self._sent = (ly, lb)
+            return ok
 
-    def jiggle(self):
-        return self.send("J")
+    def idle(self):
+        """Beam pointed all the way down at the floor, yaw 0: nobody's eyes at standby. Only a run or a test moves it."""
+        with self.lock:
+            self._sent = (None, None)
+            ok = self.send(P.encode("Y", 0))
+            return self.send(P.encode("T", int(round(max(0, min(180, servo_for(90))))))) and ok
 
-    def beam_up(self):
-        return self.send("Z")
+    def test_sweep(self):
+        """The test shot: swing left, right, centre, then back up. Needs no game."""
+        if not (self.connected and self.armed):
+            return False
+        t = now()
+        self._steps = [(t, -30.0, 50.0), (t + 1.5, 30.0, 50.0), (t + 3.0, 0.0, 50.0), (t + 4.5, 0.0, None)]
+        return True
+
+    def laser(self, on):
+        return self.send(P.encode("L", 1 if on else 0))
+
+    def zero(self):
+        """Take the stepper's present position as yaw 0."""
+        self._sent = (None, None)
+        return self.send("H")
+
+    def coils_off(self):
+        return self.send("O")
 
     def ask_range(self):
         return self.send("R")
 
-    def handle(self, msg):
-        if msg[0] == "WARN":
-            self.bus.post("tower_warn", msg[1])
-        elif msg[0] == "K":
-            self.last_k = now()
-            self.bus.post("tower_k", msg[1])
-        elif msg[0] == "RANGE":
-            self.last_range = msg[1]
-            self.bus.post("tower_range", msg[1])
+    def ask_state(self):
+        return self.send("?")
 
-
-class HudLink(Link):
-    """The HUD panel (UNO Q) over USB serial: LCD, OLED, LEDs, buzzer, joystick. Same ping scheme as the other links,
-    so a pulled cable or a dead board shows as lost within LINK_TIMEOUT_S. The joystick (J,x,y,sw every 33 ms) goes
-    straight into the shared state for the mixer; a press of its button is posted once as joy_button."""
-    role = "hud"
-    METER_HZ = 5.0
-
-    def __init__(self, *a):
-        super().__init__(*a)
-        self.zone = 0
-        self.lives = C.LIVES
-        self.samples = 0
-        self.over = False
-        self.meters = None
-        self.temp_c = None
-        self._sent = None
-        self._t_meters = 0.0
-        self._t_temp = 0.0
-        self._zone_sent, self._t_zone = None, 0.0
+    # ---- link
+    def resync(self):
+        self._sent = (None, None)
+        self.driver_ok, self._t_up = None, now()
+        self.send(P.encode("G", C.TOWER_YAW_SPS, C.TOWER_YAW_ACC, C.TOWER_SERVO_MS))
+        self.idle()
+        self.ask_state()
 
     def tick(self):
         super().tick()
         t = now()
-        if self.connected:
-            if self._zone_sent != self.zone or t - self._t_zone >= 2.0:
-                self._zone_sent, self._t_zone = self.zone, t
-                self.send(P.encode("Z", self.zone))
-            if self.meters is not None and self.meters != self._sent and t - self._t_meters >= 1.0 / self.METER_HZ:
-                self._t_meters, self._sent = t, self.meters
-                self.send(P.encode("M", *self.meters))
-            if self.temp_c is not None and t - self._t_temp >= C.TEMP_SEND_S:      # V,tempC once a second
-                self._t_temp = t
-                self.send(P.encode("V", "%.0f" % self.temp_c))
-
-    def set_meters(self, power, oxygen, food, shield):
-        self.meters = tuple(int(round(max(0, min(100, v)))) for v in (power, oxygen, food, shield))
-
-    def set_zone(self, z):
-        self.zone = int(z)
-
-    def set_temp(self, c):
-        """The lunar surface temperature (NASA Diviner replay). Sent as V,tempC once a second while connected."""
-        self.temp_c = c
-
-    def set_lives(self, n):
-        self.lives = n
-        return self.send(P.encode("H", n))
-
-    def set_samples(self, n):
-        self.samples = n
-        return self.send(P.encode("E", n))
-
-    def pickup(self):
-        return self.send("P")
-
-    def chirp(self):
-        return self.send("BZ")
-
-    def text(self, line1, line2=""):
-        return self.send(P.encode("L", "%s|%s" % (line1[:16], line2[:16])))
-
-    def clear_text(self):
-        return self.send("L,")
-
-    def game_over(self):
-        self.over = True
-        return self.send("G")
-
-    def reset(self):
-        self.over, self.lives, self.samples, self._sent = False, C.LIVES, 0, None
-        return self.send("R")
+        if self.connected and self.driver_ok is None and t - self._t_up > 3.0:
+            self.driver_ok = False
+            self.log("tower: no S answer: the Uno runs old firmware. Flash firmware/tower/tower.ino once")
+            self.bus.post("tower_old_fw", None)
+        while self._steps and self._steps[0][0] <= t:
+            _, yaw, below = self._steps.pop(0)
+            if below is None:
+                self.idle()
+            else:
+                self.aim(yaw, below, force=True)
 
     def handle(self, msg):
-        if msg[0] == "J":
-            x = max(-100, min(100, msg[1])) / 100.0 * (-1.0 if C.JOY_INVERT_X else 1.0)
-            y = max(-100, min(100, msg[2])) / 100.0 * (-1.0 if C.JOY_INVERT_Y else 1.0)
-            sw = bool(msg[3])
-            st = self.state
-            pressed = sw and not st.joy_sw
-            st.joy, st.joy_t, st.joy_sw = (y, x), now(), sw           # (speed, turn)
-            if pressed:
-                self.bus.post("joy_button")
+        if msg[0] == "RANGE":
+            self.last_range = msg[1]
+            self.bus.post("tower_range", msg[1])
+        elif msg[0] == "S":
+            self.state, self.driver_ok = msg[1:], True
+        elif msg[0] == "ARRIVED":
+            self.last_d = now()
+        elif msg[0] == "B":
+            self.bus.post("joy_button", None)                  # the tower's own test button is a test shot
 
-    def on_lost(self):
-        self.state.joy, self.state.joy_sw = (0.0, 0.0), False
+
+class HudLink(Link):
+    """The HUD panel (UNO Q, protocol 2) over USB serial. The panel is output only: the renderer draws every screen and
+    this link sends the channels whose line changed. Same ping scheme as the other links, so a pulled cable or a dead
+    board shows as lost within LINK_TIMEOUT_S. The joystick is not used."""
+    role = "hud"
+
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.r = HudRenderer()
+        self._sent = {}
+
+    def tick(self):
+        super().tick()
+        if not self.connected:
+            return
+        t = now()
+        for key, val in self.r.frame(t).items():
+            lines = val if isinstance(val, tuple) else (val,)
+            if self._sent.get(key) != lines:
+                if all(self.send(line) for line in lines):
+                    self._sent[key] = lines
+        while self.r.events:
+            if not self.send(self.r.events[0]):
+                break
+            self.r.events.pop(0)
+
+    def set_meters(self, power, oxygen, food, shield):
+        self.r.meters = tuple(int(round(max(0, min(100, v)))) for v in (power, oxygen, food, shield))
+
+    def set_zone(self, z):
+        self.r.zone = int(z)
+
+    def set_temp(self, c):
+        """The lunar surface temperature (NASA Diviner replay). Kept for the game; the panel shows no temperature."""
+        self.r.temp_c = c
+
+    def set_lives(self, n):
+        if n < self.r.lives:
+            self.r.hit()                            # a base hit: a short warning beep
+        self.r.lives = n
+
+    def set_samples(self, n):
+        self.r.samples = n
+
+    def pickup(self):
+        self.r.pickup(now())
+
+    def chirp(self):
+        self.r.chirp()
+
+    def text(self, line1, line2=""):
+        self.r.override = (str(line1), str(line2))
+
+    def clear_text(self):
+        self.r.override = None
+
+    def game_over(self):
+        self.r.over = True
+
+    def reset(self):
+        self.r.over, self.r.lives, self.r.samples, self.r.override = False, C.LIVES, 0, None
+        self.r.zone = 0
+
+    def handle(self, msg):
+        pass                                        # the panel sends nothing the game uses
 
     def resync(self):
-        if self.over:
-            self.send("G")
-        else:
-            self.send("R")
-            self.send(P.encode("H", self.lives))
-            self.send(P.encode("E", self.samples))
-        self._zone_sent, self._sent, self._t_temp = None, None, 0.0
+        self._sent = {}                             # a fresh link gets the whole screen again
 
 
 def link_thread(links, stop, state):

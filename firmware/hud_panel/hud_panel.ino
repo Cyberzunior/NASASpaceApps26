@@ -1,203 +1,200 @@
-// T-Minus_6 HUD panel, firmware v3. Arduino UNO Q, microcontroller side, 3.3 V logic. USB serial, 115200 baud.
-// Protocol: plain ASCII lines, comma separated, one line per newline (the same encoding the triage suite uses).
+// T-Minus_6 HUD panel, protocol 2: a general output panel. Arduino UNO Q (MCU side), 3.3 V logic, USB serial 115200 baud.
+// FLASH IT ONCE. It knows nothing about the game: the laptop draws every screen and sends text, LED bits, pixel colours,
+// tones and OLED drawing commands as lines. Newline-framed, the same scheme as laptop/devio/protocol.py.
 //
-// Lines in : M,power,oxygen,food,shield (the four meters, 0..100, on change, at most 5 a second)
-//            H,hearts,samples (base integrity 0..15 and sample count)   V,tempC (once a second, keep-alive)
-//            S,state (0 normal, 1 cold, 2 hot, 3 radiation storm, 4 asteroid incoming)
-//            P (sample picked up)   B (run starts, intro finished)   G (game over)
-// Lines out : J,x,y,sw every 33 ms (joystick: x right, y forward, -100..100, sw 1 while pressed)
-//             HELLO,HUD,1 once at boot   HB heartbeat once a second
+//   in : I?                      who are you                     -> I,hud,2
+//        P,seq,us                ping                            -> Q,seq,us
+//        ?                       report state                    -> S,oled,0
+//        L,line1|line2           LCD 16x2, 16 characters a row ("L," alone clears)
+//        LD,on,blink,ms          LEDs: bit 1 green (D3), 2 red (D5), 4 yellow (A0). "on" bits are lit. The "blink" bits
+//                                toggle every ms (ms 0 = no blink)
+//        N,r,g,b,ms              ARGB pixel (D4), 0..255 each. ms > 0 blinks it on and off every ms
+//        BZ                      one 1200 Hz chirp, 120 ms (does not change a pattern that is playing)
+//        BZ,hz,onMs,periodMs     buzzer (D7): hz 0 silent, period 0 one beep, else beep onMs every periodMs
+//        OC                      clear the OLED frame
+//        OT,x,y,size,text        text at x,y (text is the rest of the line)
+//        OR,x,y,w,h,fill         rectangle, fill 1 solid, 0 outline
+//        OH,x,y,size,fill        heart, about 4*size wide, fill 1 solid, 0 outline
+//        OI,x,y                  the built-in 64x48 rover picture (rover_bmp.h)
+//        OP                      push the frame to the OLED (at most 4 times a second)
 //
-// The laptop holds all the game logic. This board only mirrors numbers and states and sends back the joystick.
+// Safety: no line for 3 s -> LEDs, ARGB and buzzer go off and the LCD shows NO LINK / CHECK USB. The next line recovers.
+// Nothing blocks: every output runs on millis() timers, so serial and pings are answered at any time.
 //
-// Pins: A1 joystick VRx | A2 joystick VRy | D6 joystick SW (INPUT_PULLUP, pressed = LOW) | D3 green LED
-//       D5 red LED | A0 yellow LED | D4 ARGB data in through 330 ohm (one pixel, powered from 3V3)
-//       D7 passive buzzer + | D8 D9 LCD RS E | D10 D11 D12 D13 LCD D4 D5 D6 D7 | SDA SCL OLED SSD1306 0x3C
-//       Joystick, OLED and ARGB pixel power from 3V3. Never put 5 V on an input pin of this board.
-// Libraries: LiquidCrystal, Adafruit SSD1306, Adafruit GFX, Adafruit NeoPixel.
-// UNTESTED on hardware: check that all four libraries compile for the UNO Q core and that tone() works there.
+// Pins: D3 green LED | D5 red LED | A0 yellow LED (each through 220 ohm) | D4 ARGB data through 330 ohm (one pixel, 3V3)
+//       D7 passive buzzer | D8 D9 LCD RS E | D10 D11 D12 D13 LCD D4..D7 | SDA SCL OLED SSD1306 0x3C
+//       The joystick is not wired to this sketch. Power the OLED and the ARGB pixel from 3V3. No 5 V on any input pin.
+// Libraries: LiquidCrystal, Adafruit SSD1306, Adafruit GFX, Adafruit NeoPixel. Compiled for the UNO Q core, not yet flashed.
 #include <LiquidCrystal.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_NeoPixel.h>
+#include "rover_bmp.h"
 
-#define HUD_PROTO 1
-const int JOY_X = A1, JOY_Y = A2, JOY_SW = 6;
-const int LED_G = 3, LED_R = 5, LED_Y = A0, BUZZER = 7, ARGB = 4;
+const int LED_G = 3, LED_R = 5, LED_Y = A0, ARGB = 4, BUZZER = 7;
+const unsigned long LINK_TIMEOUT_MS = 3000;
 
-LiquidCrystal lcd(8, 9, 10, 11, 12, 13);          // RS, E, D4, D5, D6, D7
+LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
 Adafruit_SSD1306 oled(128, 64, &Wire, -1);
 Adafruit_NeoPixel pixel(1, ARGB, NEO_GRB + NEO_KHZ800);
 bool oledOk = false;
 
-int power = 0, oxygen = 0, food = 0, shield = 0;  // the four meters
-int hearts = 15, samples = 0, state = 0;
-bool gameOver = false, gotData = false;           // gotData: at least one M line seen
-bool chirpQueued = false;
-unsigned long lastRx = 0, tJoy = 0, tHB = 0, tLcd = 0, tOled = 0, tPixel = 0, tPickup = 0;
-bool linkSeen = false;                            // any line received since boot
-int cx = 512, cy = 512;                           // joystick centre, measured untouched at power-up
-String rxLine;
+char rx[65];
+uint8_t rxLen = 0;
+bool rxOver = false;
+unsigned long lastRx = 0;
+bool linkSeen = false, linkDown = false;
 
-int norm(int raw, int center) {                   // ADC reading to -100..100 with an 8 percent dead zone
-  int span = (raw >= center) ? (1023 - center) : center;
-  if (span < 1) span = 1;
-  int v = (int)((long)(raw - center) * 100 / span);
-  return (abs(v) < 8) ? 0 : constrain(v, -100, 100);
+char lcdRow[2][17] = {"HUD PANEL", "WAITING..."};
+uint8_t ledOn = 0, ledBlink = 0;
+unsigned long ledMs = 0;
+uint8_t pr = 0, pg = 0, pb = 0;
+unsigned long pxMs = 0;
+long bzHz = 0, bzOn = 0, bzPeriod = 0;
+unsigned long bzNext = 0;
+bool oledDirty = false;
+unsigned long tFast = 0, tLcd = 0, tOled = 0;
+
+// ---- field helpers: field 0 is the letters, field n is the text after the n-th comma
+const char *nth(const char *s, int n) {
+  for (int i = 0; i < n && s; i++) { s = strchr(s, ','); if (s) s++; }
+  return s;
+}
+long num(const char *s, int n) { const char *p = nth(s, n); return p ? atol(p) : 0; }
+uint8_t u8(long v) { return v < 0 ? 0 : (v > 255 ? 255 : (uint8_t)v); }
+
+void setLcd(const char *body) {                  // "line1|line2", each row padded to 16
+  for (int r = 0; r < 2; r++) { memset(lcdRow[r], ' ', 16); lcdRow[r][16] = 0; }
+  const char *bar = strchr(body, '|');
+  int n0 = bar ? (int)(bar - body) : (int)strlen(body);
+  for (int i = 0; i < n0 && i < 16; i++) lcdRow[0][i] = body[i];
+  if (bar) for (int i = 0; bar[1 + i] && i < 16; i++) lcdRow[1][i] = bar[1 + i];
 }
 
-bool linkLost() {                                 // no line for 3 s, or nothing ever arrived after boot grace
-  unsigned long now = millis();
-  if (!linkSeen) return now >= 3000;
-  return now - lastRx >= 3000;
+void beep(const char *s) {
+  if (s[2] == 0) { tone(BUZZER, 1200, 120); return; }        // "BZ" alone: the chirp
+  long hz = num(s, 1), on = num(s, 2), period = num(s, 3);
+  if (hz <= 0 || on <= 0) { bzHz = 0; noTone(BUZZER); return; }
+  if (period <= 0) { bzHz = 0; tone(BUZZER, hz, on); return; }
+  bzHz = hz; bzOn = on; bzPeriod = period; bzNext = millis();
 }
 
-bool linkUp() { return !linkLost(); }
-
-void handleLine(const String &l) {
-  if (l.length() < 1) return;
-  lastRx = millis(); linkSeen = true;
-  char c = l.charAt(0);
-  if (c == 'M' && l.charAt(1) == ',') {
-    int m[4];
-    if (sscanf(l.c_str(), "M,%d,%d,%d,%d", &m[0], &m[1], &m[2], &m[3]) == 4) {
-      for (int i = 0; i < 4; i++) m[i] = constrain(m[i], 0, 100);
-      power = m[0]; oxygen = m[1]; food = m[2]; shield = m[3];
-      gotData = true;
+void oledCmd(const char *s) {                    // s[0] == 'O'
+  if (s[1] == 'C' && s[2] == 0) { oled.clearDisplay(); return; }
+  if (s[1] == 'P' && s[2] == 0) { oledDirty = true; return; }
+  if (s[2] != ',') return;
+  int x = num(s, 1), y = num(s, 2);
+  if (s[1] == 'T') {
+    const char *t = nth(s, 4);
+    oled.setTextSize(max(1L, num(s, 3)));
+    oled.setTextColor(SSD1306_WHITE);
+    oled.setCursor(x, y);
+    oled.print(t ? t : "");
+  } else if (s[1] == 'R') {
+    int w = num(s, 3), h = num(s, 4);
+    if (num(s, 5)) oled.fillRect(x, y, w, h, SSD1306_WHITE);
+    else oled.drawRect(x, y, w, h, SSD1306_WHITE);
+  } else if (s[1] == 'I') {
+    oled.drawBitmap(x, y, ROVER_BMP, 64, 48, SSD1306_WHITE);
+  } else if (s[1] == 'H') {
+    int r = max(1L, num(s, 3)), cy = y + r;
+    if (num(s, 4)) {
+      oled.fillCircle(x + r, cy, r, SSD1306_WHITE);
+      oled.fillCircle(x + 3 * r, cy, r, SSD1306_WHITE);
+      oled.fillTriangle(x, cy, x + 4 * r, cy, x + 2 * r, y + 4 * r, SSD1306_WHITE);
+    } else {
+      oled.drawCircle(x + r, cy, r, SSD1306_WHITE);
+      oled.drawCircle(x + 3 * r, cy, r, SSD1306_WHITE);
+      oled.drawTriangle(x, cy, x + 4 * r, cy, x + 2 * r, y + 4 * r, SSD1306_WHITE);
     }
   }
-  else if (c == 'H' && l.charAt(1) == ',') {
-    int h = 0, s = 0;
-    if (sscanf(l.c_str(), "H,%d,%d", &h, &s) == 2) { hearts = constrain(h, 0, 15); samples = max(s, 0); }
-  }
-  else if (c == 'V' && l.charAt(1) == ',') { }    // keep-alive only: the laptop holds the temperature
-  else if (c == 'S' && l.charAt(1) == ',') { state = constrain(l.substring(2).toInt(), 0, 4); }
-  else if (c == 'P') { tPickup = millis(); if (!tPickup) tPickup = 1; chirpQueued = true; }
-  else if (c == 'B') { gameOver = false; chirpQueued = true; }
-  else if (c == 'G') { gameOver = true; }
 }
 
-void readSerial() {                               // one line at a time, never blocks
+void handleLine(char *s) {
+  lastRx = millis(); linkSeen = true;
+  if (!strcmp(s, "I?")) { Serial.println(F("I,hud,2")); return; }
+  if (!strcmp(s, "?")) { Serial.print(F("S,")); Serial.print(oledOk ? 1 : 0); Serial.println(F(",0")); return; }
+  if (s[0] == 'P' && s[1] == ',') { Serial.print(F("Q,")); Serial.println(s + 2); return; }
+  if (s[0] == 'L' && s[1] == 'D' && s[2] == ',') {
+    ledOn = u8(num(s, 1)); ledBlink = u8(num(s, 2)); ledMs = max(0L, num(s, 3));
+    return;
+  }
+  if (s[0] == 'L' && (s[1] == ',' || s[1] == 0)) { setLcd(s[1] == ',' ? s + 2 : ""); return; }
+  if (s[0] == 'N' && s[1] == ',') {
+    pr = u8(num(s, 1)); pg = u8(num(s, 2)); pb = u8(num(s, 3)); pxMs = max(0L, num(s, 4));
+    return;
+  }
+  if (s[0] == 'B' && s[1] == 'Z') { beep(s); return; }
+  if (s[0] == 'O') oledCmd(s);
+}
+
+void readSerial() {                              // one byte at a time, never blocks
   while (Serial.available()) {
     char ch = Serial.read();
-    if (ch == '\n') { handleLine(rxLine); rxLine = ""; }
-    else if (ch != '\r' && rxLine.length() < 48) rxLine += ch;
+    if (ch == '\n') {
+      if (!rxOver && rxLen) { rx[rxLen] = 0; handleLine(rx); }
+      rxLen = 0; rxOver = false;
+    } else if (ch == '\r') {
+    } else if (rxLen < 64) rx[rxLen++] = ch;
+    else rxOver = true;
   }
 }
 
-void row(int r, const char *s) {                  // always 16 characters, so no clear() flicker
-  char buf[17];
-  snprintf(buf, sizeof(buf), "%-16s", s);
-  lcd.setCursor(0, r); lcd.print(buf);
+void checkLink(unsigned long now) {              // silence for 3 s = link down, and every output goes quiet
+  bool down = linkSeen ? (now - lastRx >= LINK_TIMEOUT_MS) : (now >= LINK_TIMEOUT_MS);
+  if (down == linkDown) return;
+  linkDown = down;
+  if (down) {
+    bzHz = 0; noTone(BUZZER);
+    strcpy(lcdRow[0], "NO LINK         "); strcpy(lcdRow[1], "CHECK USB       ");
+  }
 }
 
 void showLcd() {
-  char l1[20], l2[20];
-  if (linkLost())       { strcpy(l1, "NO LINK");         strcpy(l2, "CHECK USB"); }
-  else if (gameOver)    { strcpy(l1, "GAME OVER");       strcpy(l2, "PRESS START"); }
-  else if (!gotData)    { strcpy(l1, "OUTPOST ONLINE");  strcpy(l2, "WAITING..."); }
-  else if (state == 1)  { strcpy(l1, "COLD SNAP");       strcpy(l2, "HEATING ON"); }
-  else if (state == 2)  { strcpy(l1, "HOT SPELL");       strcpy(l2, "COOLING ON"); }
-  else if (state == 3)  { strcpy(l1, "RADIATION STORM"); strcpy(l2, "BOOST SHIELD"); }
-  else if (state == 4)  { strcpy(l1, "ASTEROID");        strcpy(l2, "DRIVE CLEAR!"); }
-  else {
-    snprintf(l1, 20, "PWR %-3d  O2 %-3d", power, oxygen);
-    snprintf(l2, 20, "FOOD%-3d SHLD%-3d", food, shield);
-  }
-  row(0, l1); row(1, l2);
+  lcd.setCursor(0, 0); lcd.print(lcdRow[0]);
+  lcd.setCursor(0, 1); lcd.print(lcdRow[1]);
 }
 
-void showOled() {
-  if (!oledOk) return;
-  oled.clearDisplay();
-  oled.setTextColor(SSD1306_WHITE);
-  oled.setTextSize(2);
-  oled.setCursor(0, 0);
-  oled.print("BASE "); oled.print(hearts); oled.print("/15");
-  oled.drawRect(0, 24, 128, 12, SSD1306_WHITE);
-  oled.fillRect(2, 26, (124 * hearts) / 15, 8, SSD1306_WHITE);
-  oled.setCursor(0, 44);
-  oled.print("SAMPLES "); oled.print(samples);
+void showLedsAndPixel(unsigned long now) {       // 50 ms rate
+  uint8_t lit = ledOn;
+  if (ledMs && ((now / ledMs) & 1)) lit ^= ledBlink;
+  if (linkDown) lit = 0;
+  digitalWrite(LED_G, (lit & 1) ? HIGH : LOW);
+  digitalWrite(LED_R, (lit & 2) ? HIGH : LOW);
+  digitalWrite(LED_Y, (lit & 4) ? HIGH : LOW);
+  uint32_t c = 0;
+  if (!linkDown && (pxMs == 0 || ((now / pxMs) & 1) == 0)) c = pixel.Color(pr, pg, pb);
+  pixel.setPixelColor(0, c); pixel.show();
+}
+
+void showOled(unsigned long now) {               // at most every 250 ms, and only after OP
+  if (!oledOk || !oledDirty || now - tOled < 250) return;
+  oledDirty = false; tOled = now;
   oled.display();
 }
 
-void showLeds() {                                 // cheap digitalWrites: every pass is fine
-  unsigned long now = millis();
-  bool up = linkUp();
-  digitalWrite(LED_G, up && !gameOver && state == 0);
-  bool warn = up && !gameOver && state >= 1 && state <= 3;
-  bool blinkFast = up && !gameOver && state == 4 && (now / 150) % 2;
-  digitalWrite(LED_R, warn || blinkFast);
-  digitalWrite(LED_Y, tPickup && now - tPickup < 1000 && ((now - tPickup) / 100) % 2 == 0);
-}
-
-void showPixel() {
-  unsigned long now = millis();
-  uint32_t col = 0;
-  if (linkLost()) {                               // dim white breathing, 1.2 s cycle
-    unsigned long ph = now % 1200;
-    int b = (ph < 600) ? (int)(30L * ph / 600) : (int)(30L * (1200 - ph) / 600);
-    col = pixel.Color(b, b, b);
-  }
-  else if (gameOver)   col = pixel.Color(60, 0, 0);
-  else if (state == 0) col = pixel.Color(0, 40, 0);
-  else if (state == 1) col = pixel.Color(0, 0, 60);
-  else if (state == 2) col = pixel.Color(60, 0, 0);
-  else if (state == 3) col = pixel.Color(40, 0, 50);
-  else if (state == 4) col = ((now / 150) % 2) ? pixel.Color(60, 25, 0) : 0;
-  pixel.setPixelColor(0, col); pixel.show();
-}
-
-void buzzerTick() {
-  static unsigned long tBeep = 0;
-  unsigned long now = millis();
-  if (chirpQueued) { tone(BUZZER, 1200, 120); chirpQueued = false; tBeep = now; return; }
-  if (!linkUp()) return;
-  int f = 0; unsigned long period = 0;
-  if (gameOver)        { f = 300;  period = 1500; }
-  else if (state == 1) { f = 400;  period = 300; }
-  else if (state == 2) { f = 2000; period = 300; }
-  else if (state == 3) { f = 800;  period = 700; }
-  else if (state == 4) { f = 1600; period = 200; }
-  if (f && now - tBeep >= period) { tone(BUZZER, f, 80); tBeep = now; }
-}
-
-void sendJoystick() {                             // every 33 ms, even with the link down
-  Serial.print("J,");
-  Serial.print(norm(analogRead(JOY_X), cx)); Serial.print(',');
-  Serial.print(-norm(analogRead(JOY_Y), cy)); Serial.print(',');   // flip so forward is positive
-  Serial.println(digitalRead(JOY_SW) == LOW ? 1 : 0);
-}
-
-void setupJoystick() {                            // the stick must be untouched at power-up: this is its centre
-  analogReadResolution(10);
-  pinMode(JOY_SW, INPUT_PULLUP);
-  long sx = 0, sy = 0;
-  for (int i = 0; i < 16; i++) { sx += analogRead(JOY_X); sy += analogRead(JOY_Y); delay(5); }
-  cx = sx / 16; cy = sy / 16;
+void buzzerTick(unsigned long now) {             // a pattern restarts only when BZ,hz,on,period arrives
+  if (bzHz && now >= bzNext) { tone(BUZZER, bzHz, bzOn); bzNext = now + bzPeriod; }
 }
 
 void setup() {
   Serial.begin(115200);
-  pinMode(LED_G, OUTPUT); pinMode(LED_R, OUTPUT); pinMode(LED_Y, OUTPUT); pinMode(BUZZER, OUTPUT);
-  lcd.begin(16, 2);
+  pinMode(LED_G, OUTPUT); pinMode(LED_R, OUTPUT); pinMode(LED_Y, OUTPUT);
+  lcd.begin(16, 2); showLcd();
   Wire.begin();
   oledOk = oled.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-  pixel.begin(); pixel.setBrightness(255); pixel.show();
-  setupJoystick();
-  Serial.print("HELLO,HUD,"); Serial.println(HUD_PROTO);
-  showLcd(); showOled();
+  if (oledOk) { oled.clearDisplay(); oled.display(); }
+  pixel.begin(); pixel.show();
+  Serial.println(F("HELLO,hud,2"));
 }
 
 void loop() {
   readSerial();
   unsigned long now = millis();
-  if (now - tJoy >= 33)   { tJoy = now;  sendJoystick(); }   // 30 times a second
-  if (now - tHB >= 1000)  { tHB = now;   Serial.println("HB"); }
-  if (now - tLcd >= 150)  { tLcd = now;  showLcd(); }        // fixed rates, never per loop pass
-  if (now - tOled >= 250) { tOled = now; showOled(); }
-  if (now - tPixel >= 50) { tPixel = now; showPixel(); }
-  showLeds();
-  buzzerTick();
+  checkLink(now);
+  if (now - tFast >= 50) { tFast = now; showLedsAndPixel(now); }
+  if (now - tLcd >= 150) { tLcd = now; showLcd(); }
+  showOled(now);
+  buzzerTick(now);
 }

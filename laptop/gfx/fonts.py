@@ -8,6 +8,7 @@ def reset():
     """Forget every font and rendered string (a new pygame session invalidates them)."""
     _cache.clear()
     _text_cache.clear()
+    _width_cache.clear()
 
 import os
 
@@ -43,6 +44,7 @@ def get(size, mono=False, bold=False, display=False):
 
 
 _text_cache = {}
+_width_cache = {}
 
 
 def _spaced(f, s, color, track):
@@ -92,4 +94,11 @@ def text(surface, s, pos, size=24, color=(236, 242, 250), mono=False, bold=False
 
 
 def width(s, size, mono=False, bold=False):
-    return get(size, mono, bold).size(str(s))[0]
+    """Cached: Font.size() is one of the most expensive calls in the HUD and these strings repeat a lot."""
+    key = (s, size, mono, bold)
+    w = _width_cache.get(key)
+    if w is None:
+        if len(_width_cache) > 600:
+            _width_cache.clear()
+        w = _width_cache[key] = get(size, mono, bold).size(str(s))[0]
+    return w

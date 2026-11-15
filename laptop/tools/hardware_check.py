@@ -39,12 +39,12 @@ def main():
             print("   camera pan sent -60, 60, 0: look at the camera")
         if L["tower"].connected:
             print("\nTower (nobody in front of it)")
-            L["tower"].allow(True)
-            L["tower"].fire(test=True)
-            time.sleep(7.0)                          # ranging, the swing down, the 3 s countdown
-            evs = net.drain()
-            kinds = [e.kind for e in evs if e.kind in ("tower_warn", "tower_k")]
-            ok &= check("warning first, then K", kinds == ["tower_warn", "tower_k"], str(kinds))
+            L["tower"].test_sweep()
+            time.sleep(6.0)                          # left, right, centre, back up
+            ok &= check("tower answered D (both motors arrived)", L["tower"].last_d > 0)
+            L["tower"].ask_range()
+            time.sleep(0.6)
+            ok &= check("range reading came back", L["tower"].last_range is not None, str(L["tower"].last_range))
         if L["hud"].connected:
             print("\nHUD panel")
             check("joystick lines arriving (J,x,y,sw)", st.joy_t > 0, "stick %s" % (st.joy,))

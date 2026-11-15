@@ -57,6 +57,11 @@ class Connections:
         i = names.index(row.value) if row.value in names else -1
         row.value = names[(i + d) % len(names)]
 
+    @staticmethod
+    def _is_port(value):
+        v = (value or "").strip()
+        return v.upper().startswith("COM") or v.startswith("/dev/") or v.startswith("tty")
+
     # ---- connect / disconnect
     def connect(self, key):
         row = self.rows[key]
@@ -70,8 +75,12 @@ class Connections:
             self.scanner.disconnect(key)
             self.scanner.connect(value, key)
         elif key == "robot":
-            if not self.hub.connect("robot", value):
-                row.wanted, row.detail = False, "use ip:port, e.g. 192.168.1.50:5005"
+            if self._is_port(value):                     # the rover's STM32 over USB serial
+                self.hub.disconnect("robot")
+                self.scanner.disconnect("robot")
+                self.scanner.connect(value, "robot")
+            elif not self.hub.connect("robot", value):
+                row.wanted, row.detail = False, "use a COM port (COM6) or ip:port (192.168.1.50:5005)"
         elif key == "camera":
             self.camera.set_url(value)
         self.log("connect %s %s" % (key, value))
@@ -83,6 +92,7 @@ class Connections:
             self.scanner.disconnect(key)
         elif key == "robot":
             self.hub.disconnect("robot")
+            self.scanner.disconnect("robot")
         elif key == "camera":
             self.camera.set_url("")
         self.log("disconnect " + key)
@@ -96,9 +106,9 @@ class Connections:
     def connect_saved(self):
         """At start: every saved value is connected again (a missing device simply stays grey / lost)."""
         for key in self.order:
-            if self.rows[key].value and key != "robot":
+            if self.rows[key].value and (key != "robot" or self._is_port(self.rows[key].value)):
                 self.connect(key)
-        if self.rows["robot"].value:
+        if self.rows["robot"].value and not self._is_port(self.rows["robot"].value):
             self.rows["robot"].wanted = True            # the hub already attached ROBOT_ADDR
 
     def is_up(self, key):

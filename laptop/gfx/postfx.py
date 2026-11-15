@@ -1,13 +1,16 @@
 """Post-processing on the CPU, built around what pygame does fast (opaque ADD / MULT blits, small scales):
 
- * bloom: downscale, bright pass, blur on a tiny copy, add back. The glow layer is refreshed every other frame.
- * vignette: one opaque MULT blit; red glow in heat and frost in cold are quantized ADD blits (no per-pixel alpha
-   with surface alpha, which is slow in pygame).
- * chromatic aberration: only while damaged, done on the small bloom copy (red and blue fringes either side).
+  * bloom: downscale, bright pass, blur on a tiny copy, add back. The glow layer is refreshed every few
+    frames (see gfx.perf): it is a blur, so a few frames of lag are invisible. The downscale is nearest
+    neighbour - 50x cheaper than smoothscale and unnoticeable once the blur has run.
+  * vignette: one opaque MULT blit; red glow in heat and frost in cold are quantized ADD blits (no
+    per-pixel alpha with surface alpha, which is slow in pygame).
+  * chromatic aberration: only while damaged, done on the small bloom copy (red and blue fringes either side).
 Level 0 = off, 1 = vignette only, 2 = full."""
 import numpy as np
 import pygame
 import config as C
+from gfx.perf import PERF
 
 LEVELS = (0.34, 0.67, 1.0)
 
@@ -31,6 +34,7 @@ class PostFx:
         g = _field(self.w, self.h, 2.2)
         self.heat = [_opaque(self.w, self.h, np.dstack([g * 150 * k, g * 26 * k, g * 6 * k])) for k in LEVELS]
         self.frost = [_opaque(self.w, self.h, np.dstack([g * 40 * k, g * 85 * k, g * 120 * k])) for k in LEVELS]
+        self.user_level = C.POSTFX
         self.level = C.POSTFX
         self.heat_a = self.frost_a = 0.0
         self.small_size = (self.w // 8, self.h // 8)
@@ -38,6 +42,10 @@ class PostFx:
         self.scratch = pygame.Surface(self.small_size).convert()
         self.glow = pygame.Surface((self.w, self.h)).convert()
         self.frame = 0
+
+    def sync(self):
+        """Recompute the effective level after the player changes the setting."""
+        self.level = min(self.user_level, PERF.k["postfx"])
 
     def update(self, dt, state):
         """state 0 normal, 1 cold, 2 hot: tween the tinted vignettes."""
@@ -63,14 +71,19 @@ class PostFx:
         pygame.transform.smoothscale(blur, (self.w, self.h), self.glow)
 
     def apply(self, surf, damage=0.0):
-        if self.level <= 0:
+        cap = PERF.k["postfx"]
+        level = self.user_level if self.user_level < cap else cap      # the tier may cap, never raise
+        self.level = level
+        if level <= 0:
             return
         self.frame += 1
-        if self.level >= 2:
-            if self.frame % 3 == 0 or damage > 0.05:                  # the glow changes slowly: refresh every third frame
-                small = pygame.transform.smoothscale(surf, self.small_size, self.scratch)
-                small.fill((88, 88, 88), special_flags=pygame.BLEND_RGB_SUB)              # bright pass
-                self._blur(small, damage)
+        if level >= 2:
+            every = PERF.k["bloom_every"]
+            if self.frame % every == 0 or damage > 0.05:
+                # bright pass at 1/8: nearest is fine, the blur that follows removes the aliasing
+                pygame.transform.scale(surf, self.small_size, self.scratch)
+                self.scratch.fill((88, 88, 88), special_flags=pygame.BLEND_RGB_SUB)
+                self._blur(self.scratch, damage)
             surf.blit(self.glow, (0, 0), special_flags=pygame.BLEND_RGB_ADD)
         surf.blit(self.dark, (0, 0), special_flags=pygame.BLEND_RGB_MULT)
         h = self._pick(self.heat, self.heat_a)

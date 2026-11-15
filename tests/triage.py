@@ -285,7 +285,7 @@ def triage_robot(args):
 
 # --------------------------------------------------------------- tower
 def triage_tower(args):
-    print("\n== Asteroid tower (UNO R3, USB serial) ==")
+    print("\n== Asteroid tower (UNO R3, USB serial, firmware v3: a serial-driven pan/tilt laser) ==")
     print("  safety: the green laser is always on. Nobody looks into it; the idle beam points at empty ceiling")
     link = open_serial_link(args, "tower")
     if not link:
@@ -295,29 +295,41 @@ def triage_tower(args):
         check("tower: I? answered I,tower,2", link.line("I,tower", 2.0) is not None)
         link.send("P,1,100")
         check("tower: ping P,seq,us answered by Q,seq,us", link.line("Q,1", 2.0) is not None)
+        link.send("?")
+        check("tower: ? answered by S,yaw,servo,laser,moving (v3 firmware; the old game sketch does not)", link.line("S,", 2.0) is not None)
         ask("tower: laser on, beam straight up", "Laser lit and pointing straight up?")
+        link.send("G,800,800,12")
+        link.send("T,90")
+        link.send("Y,0")
+        check("tower: D arrives once both motors are there", link.line("D,", 6.0) is not None)
+        ask("tower: beam level", "Beam level (T,90)? Keep it off faces. (else TOWER_PITCH_LEVEL)")
+        link.send("Y,-30")
+        link.send("P,2,100")
+        check("tower: pings are answered while the stepper moves", link.line("Q,2", 2.0) is not None)
+        check("tower: D after Y,-30", link.line("D,", 6.0) is not None)
+        ask("tower: Y,-30 swings left", "Beam swung to the LEFT? (else TOWER_YAW_DIR = -1 in laptop/config.py)")
+        link.send("Y,30")
+        check("tower: D after Y,30", link.line("D,", 6.0) is not None)
+        ask("tower: Y,30 swings right", "Beam swung to the RIGHT?")
+        link.send("Y,0")
+        link.send("T,130")
+        check("tower: D after Y,0 and T,130", link.line("D,", 6.0) is not None)
+        ask("tower: beam pitched down", "Beam now points DOWN onto the floor? (else TOWER_PITCH_DIR = -1)")
         pause("put the rover on the track, 40 to 100 cm in front of the tower")
         link.send("R")
         line = link.line("R,", 3.0)
         v = floats(split_csv(line or ""), 2)
         check("tower: R answered by R,cm inside 10..150 (999 = a loose TRIG / ECHO wire)", bool(v) and 10 <= v[1] <= 150, str(line))
-        link.send("F,0")
-        link.send("P,2,100")
-        check("tower: pings are answered during the sequence", link.line("Q,2", 2.0) is not None)
-        check("tower: F answered by W,3 once the beam is down", link.line("W,3", 6.0) is not None)
-        ask("tower: beam on the floor just ahead of the rover", "Laser spot on the floor just ahead of the rover? (else PITCH_DIR, LASER_H_CM, LEAD_CM)")
-        check("tower: K,1 about 3 s later (the rover stayed in the spot)", link.line("K,1", 5.0) is not None)
-        ask("tower: the beam went back up", "Beam straight up again, stepper back at 0?")
-        time.sleep(2.5)
-        pause("now press Enter, and drive or lift the rover off the track during the countdown")
-        link.send("F")
-        check("tower: second F warns again", link.line("W,3", 6.0) is not None)
-        check("tower: K,0 when the rover left the spot", link.line("K,0", 5.0) is not None)
-        time.sleep(2.5)
+        link.send("L,0")
+        link.send("?")
+        line = link.line("S,", 2.0)
+        check("tower: L,0 switches the laser off", line is not None and line.strip().split(",")[3] == "0", str(line))
+        link.send("L,1")
         pause("press the test button on the tower (D2), if fitted")
-        check("tower: button runs the same W,3 then K", link.line("W,3", 8.0) is not None and link.line("K,", 5.0) is not None)
-        link.send("Z")
-        check("tower: Z sent (beam back up)", True)
+        check("tower: the button sends B,1", link.line("B,1", 8.0) is not None)
+        link.send("Y,0")
+        link.send("T,180")
+        check("tower: beam back up (D)", link.line("D,", 6.0) is not None)
     finally:
         link.close()
 
@@ -348,9 +360,9 @@ WIRES = {
     ],
     "tower": [
         ("test button (optional)", "D2", "button"),
-        ("tilt stepper IN1", "D4", "stepper"), ("tilt stepper IN2", "D5", "stepper"),
-        ("tilt stepper IN3", "D6", "stepper"), ("tilt stepper IN4", "D7", "stepper"),
-        ("push servo", "D9", "servo"),
+        ("yaw stepper IN1", "D4", "stepper"), ("yaw stepper IN2", "D5", "stepper"),
+        ("yaw stepper IN3", "D6", "stepper"), ("yaw stepper IN4", "D7", "stepper"),
+        ("pitch servo", "D9", "servo"),
         ("HC-SR04 TRIG", "D11", "ultrasonic_trig"), ("HC-SR04 ECHO", "D12", "ultrasonic_echo"),
         ("green laser (2N2222)", "D13", "led"),
     ],

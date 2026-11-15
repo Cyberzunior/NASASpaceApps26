@@ -127,12 +127,12 @@ def pill(surf, rect, text, color, size=17):
     fonts.text(surf, text, rect.center, size, color, bold=True, anchor="center")
 
 
-def keycap(surf, pos, label, on=True, size=30):
+def keycap(surf, pos, label, on=True, size=30, color=None):
     """A keyboard key: raised cap with a darker base."""
     x, y = pos
-    col = K.CYAN if on else K.DIM
+    col = (color or K.CYAN) if on else K.DIM
     pygame.draw.rect(surf, K.mix(K.PANEL, (0, 0, 0), 0.4), (x, y + 3, size, size), border_radius=7)
-    pygame.draw.rect(surf, (26, 44, 84) if on else (20, 28, 50), (x, y, size, size), border_radius=7)
+    pygame.draw.rect(surf, K.mix((20, 28, 50), col, 0.18) if on else (20, 28, 50), (x, y, size, size), border_radius=7)
     pygame.draw.rect(surf, K.mix(col, K.PANEL, 0.35), (x, y, size, size), 1, border_radius=7)
     fonts.text(surf, label, (x + size // 2, y + size // 2), int(size * 0.68), col, bold=True, anchor="center")
 

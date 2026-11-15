@@ -26,7 +26,7 @@ class Net:
         self.sims = []
         if sim:
             from devio.sim_devices import SimHud, SimRobot, SimTower
-            h, t = SimHud(), SimTower(warn_s=0.3)
+            h, t = SimHud(), SimTower()
             self.sims = [SimRobot(self.hub.port), t, h]
             self.scanner.add_sim("SIM-TOWER", t.port, "tower")
             self.scanner.add_sim("SIM-HUD", h.port, "hud")

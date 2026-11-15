@@ -119,6 +119,7 @@ class Impacts:
         self.fetched = FETCHED.get("meo_impacts.json")
         self.events = sorted((e for e in raw if _date(e.get("date"))), key=lambda e: _date(e["date"]))
         self.ok = len(self.events) >= 5
+        self.test_event = self.events[0] if self.ok else {"date": None}    # the test shot reads the first row of the database
 
     def gap_s(self, i):
         """Game seconds between flash i-1 and flash i: the real gap in days, scaled and clamped."""

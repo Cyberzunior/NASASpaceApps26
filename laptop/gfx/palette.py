@@ -21,6 +21,17 @@ TRACK = (16, 26, 52)          # empty bar / field background
 DOT = {"green": GREEN, "yellow": YELLOW, "red": RED}
 
 
+_mix_cache = {}
+
+
 def mix(a, b, t):
-    t = max(0.0, min(1.0, t))
-    return tuple(int(a[i] + (b[i] - a[i]) * t) for i in range(3))
+    """Blend two colours. Memoised: the HUD asks for the same 40-odd blends every frame."""
+    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
+    key = (a, b, t)
+    c = _mix_cache.get(key)
+    if c is None:
+        if len(_mix_cache) > 1500:
+            _mix_cache.clear()
+        c = _mix_cache[key] = (int(a[0] + (b[0] - a[0]) * t), int(a[1] + (b[1] - a[1]) * t),
+                               int(a[2] + (b[2] - a[2]) * t))
+    return c

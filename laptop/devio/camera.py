@@ -65,7 +65,7 @@ class Camera(threading.Thread):
             url = self.url
             cap = None
             try:
-                cap = cv2.VideoCapture(url)
+                cap = cv2.VideoCapture(int(url) if str(url).isdigit() else url)   # "0" = the USB webcam
                 try:
                     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 except Exception:

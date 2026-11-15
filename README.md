@@ -20,13 +20,13 @@ Keys: W A S D or arrows drive, 1 Scrubber, 2 Greenhouse, 3 Shield boost, 4 Rest 
 C rover cam, Y or P auto-pilot (steers to the sample), Esc pause, Enter restarts after a run. Gamepad: left stick drives,
 A X LB and right-stick click are actions 1 to 4, RB fires the **Test shot**, right stick pans, B cam, Y auto-pilot, Start
 pause. The joystick on the HUD panel drives too, and its button (or X, or RB) is the
-**Test shot**: one asteroid sequence now. With several inputs active, the one pushed furthest wins; they are never added.
+**Test shot**: one asteroid strike now (in a menu it sweeps the tower left and right). With several inputs active, the one pushed furthest wins; they are never added.
 
 ## The three devices and the camera
 | Unit | Board | Link |
 |---|---|---|
 | HUD panel (LCD, OLED, four LEDs, buzzer, joystick) | UNO Q, `firmware/hud_panel/` | USB cable, COM port |
-| Asteroid tower (yaw stepper and pitch servo aim a green laser, fixed HC-SR04) | UNO R3, `firmware/tower/` | USB cable, COM port |
+| Asteroid tower (yaw stepper and pitch servo aim a green laser, fixed HC-SR04). Flash `tower.ino` once; the laptop aims it over serial | UNO R3, `firmware/tower/` | USB cable, COM port |
 | Rover (2WD, two TT motors on one dual DRV8833) | UNO Q, `firmware/robot/` | Wi-Fi, `ip:port` (192.168.1.50:5005) |
 | Camera | Logitech C920 on the rover (USB), panned by a stepper | MJPEG over Wi-Fi, `camera_stream.py` |
 

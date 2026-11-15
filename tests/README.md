@@ -8,7 +8,7 @@ Headless, no hardware, about a minute:
     pytest tests                         # same tests with pytest (pip install pytest)
 
 `test_model` (mixer, dead zone, movement model, calibration), `test_protocol_config` (every line, garbage, settings file),
-`test_game_rules` (hits, protection, game over, asteroid sequence, thermal zones, auto-pilot),
+`test_game_rules` (hits, protection, game over, asteroid sequence, tower aiming and scan, thermal zones, auto-pilot),
 `test_devices` (discovery, RTT, failsafe, latch, tower safety, unplug and replug over real loopback sockets),
 `test_firmware_bridges` (static checks of the sketches, UNO Q bridge self-tests), `test_app_flow` (the whole game in `--sim`).
 Soak: `python laptop/tools/soak.py --demos 3`.
@@ -42,7 +42,7 @@ The box under the log sends any line to any board (`I?`, `V,35`, `A,90`, `PING,D
 |---|---|
 | Weather + LCD | live `W` readout; buttons for `BZ` (buzz D6) / `V,24` / `V,35` / `V,10` / `H,14` / `G` / `R`; a mock 16x2 LCD showing what the real LCD should say right now; a box that sends custom text (`L,line1\|line2`, until `R` or **Back to weather**) |
 | Robot | hold-to-drive pad (resent at 20 Hz), speed, auto-pilot flag, `X` / `R`, radar of the `S` lines, bumpers |
-| Tower | `F` with a safety tick, `R` / `X`, F-to-K time |
+| Tower | yaw / servo sliders (`Y`, `T`), scan, laser, `H` / `O` / `G`, `R` range, `?` state |
 | Bench | stepper moves and servo angles through `PinTester.ino` on a spare UNO |
 | Camera | stream picture, resolution and fps |
 | Gamepad | axes, buttons, last button number, expected numbers from `laptop/config.py` |
@@ -71,7 +71,7 @@ The exit code is 1 when any check failed, so it works as a gate before a demo.
   hot (red LED, 2000 Hz beeps) and cold (blue LED, 400 Hz beeps), and `V,tempC` on the LCD.
 - **robot** (UNO Q, Wi-Fi): each wheel alone, both forward and back, a right turn, the camera pan (`C,angle`),
   the 300 ms stop, bumpers `B,L` / `B,R`. Wheels on blocks.
-- **tower** (UNO R3, USB): `I?`, pings answered during a sequence, `R` distance reading, `J` jiggle, `F` gives `W,3`
+- **tower** (UNO R3, USB, firmware v3): `I?`, `?` state, pings answered while moving, `Y` left / right, `T` level / down, `D` on arrival, `R` distance, `L` laser
   then `K,1` with the rover in the spot and `K,0` when it leaves, the test button, `Z`.
 - **wiring**: upload `PinTester.ino` to a spare UNO, connect the harness, and it
   steps through every wire of the chosen board (weather / robot / tower):

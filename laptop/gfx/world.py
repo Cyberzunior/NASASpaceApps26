@@ -9,6 +9,7 @@ from core.game import KINDS
 from core.model import angdiff
 from gfx import fonts, palette as K
 from gfx.particles import Particles
+from gfx.perf import PERF
 from gfx.starfield import Starfield
 from gfx.rover import Rover, glow_add, glow_sprite
 from gfx.widgets import overlay
@@ -301,7 +302,7 @@ class WorldView:
 
     # ---- world-anchored effects
     def _spawn(self, x, y, h, vx, vy, vh, life, size, c0, c1, land_dies=True, add=False):
-        if len(self.wparts) < 460:
+        if len(self.wparts) < PERF.k["wparts"]:
             self.wparts.append([x, y, h, vx, vy, vh, 0.0, life, size, c0, c1, land_dies, add])
 
     def blast(self, x, y, power=1.0):
@@ -586,64 +587,108 @@ class WorldView:
         """Chase camera: black sky with stars, grey ground with craters and rocks, the rover seen from behind at the bottom centre."""
         W, H, hz = self.W, self.H, self.horizon
         gshade, gmax = self.gshade, len(self.gshade) - 1
-        project, fill = self.project, surf.fill
+        fill = surf.fill
+        kn = PERF.k
         self.draw_sky(surf)
         surf.blit(self.ground3d, (0, hz))
         cx0, cy0 = self.cam
+        ca, sa, focal = self.ca, self.sa, C.CAM_FOCAL
+        half, chord = W * 0.5, C.CAM_BACK_M
+        ell = pygame.draw.ellipse
+        pstep = max(1, int(round(1.0 / max(0.05, kn["pebbles"]))))       # density knob
         R2 = 30.0
         for cx in range(math.floor((cx0 - R2) / CELL_M), math.floor((cx0 + R2) / CELL_M) + 1):     # pebbles: the ground visibly moves
             for cy in range(math.floor((cy0 - R2) / CELL_M), math.floor((cy0 + R2) / CELL_M) + 1):
-                for wx, wy, v in cell_specks(cx, cy):
-                    sx, sy, z = project(wx, wy)
-                    if 2.5 < z < 36.0 and 0 <= sx < W:
-                        s = min(3, max(1, int(36.0 / z)))
-                        g = gshade[min(gmax, int(sy) - hz)] + v
-                        fill((g, g, g + 3), (sx, sy, s + 1, s))
+                for i, (wx, wy, v) in enumerate(cell_specks(cx, cy)):
+                    if i % pstep:
+                        continue
+                    dx, dy = wx - cx0, wy - cy0
+                    z = dx * ca + dy * sa + chord
+                    if z <= 2.5 or z >= 36.0:
+                        continue
+                    k = focal / z
+                    sx = half + (dy * ca - dx * sa) * k
+                    if sx < 0.0 or sx >= W:
+                        continue
+                    sy = hz + C.CAM_HEIGHT_M * k
+                    if sy >= H:
+                        continue
+                    s = 1 if z > 18.0 else 2 if z > 12.0 else 3
+                    gi = int(sy) - hz
+                    g = gshade[gmax if gi > gmax else 0 if gi < 0 else gi] + v
+                    fill((g, g, g + 3), (sx, sy, s + 1, s))
         self.draw_tracks(surf)
         items = []
-        R = 46.0
+        append = items.append
+        R = 46.0 * kn["rocks"]
+        far = R * 1.6
         for cx in range(math.floor((cx0 - R) / CELL_M), math.floor((cx0 + R) / CELL_M) + 1):
             for cy in range(math.floor((cy0 - R) / CELL_M), math.floor((cy0 + R) / CELL_M) + 1):
                 for wx, wy, kind, r, _var in cell_items(cx, cy):
-                    items.append((project(wx, wy), kind, r))
+                    dx, dy = wx - cx0, wy - cy0
+                    z = dx * ca + dy * sa + chord
+                    if z <= 1.0 or z > far:
+                        continue
+                    k = focal / z
+                    append((z, half + (dy * ca - dx * sa) * k, kind, r))
         for x, y, r in self.scars:
-            items.append((project(x, y), "s", r))
-        items.sort(key=lambda it: -it[0][2])
-        for (sx, sy, z), kind, r in items:
-            if z <= 1.0 or z > R * 1.6 or sx < -300 or sx > W + 300:
+            dx, dy = x - cx0, y - cy0
+            z = dx * ca + dy * sa + chord
+            if z > 1.0:
+                append((z, half + (dy * ca - dx * sa) * focal / z, "s", r))
+        items.sort(reverse=True)                                         # painter's algorithm: far first
+        step = max(1, int(round(1.0 / max(0.05, kn["rocks"]))))
+        for i, (z, sx, kind, r) in enumerate(items):
+            if z > 14.0 and step > 1 and i % step:                       # the far field thins out, the near field never
                 continue
-            k = C.CAM_FOCAL / z
+            k = focal / z
             w = r * k
-            fade = max(0.0, min(1.0, 1.0 - (z - 25.0) / 35.0))
-            g = gshade[max(0, min(gmax, int(sy) - hz))]                                     # ground brightness at this depth
+            sy = hz + C.CAM_HEIGHT_M * k
+            if sy - w > H or sy + w < 0 or sx + w * 2.0 < 0 or sx - w * 2.0 > W:
+                continue                                                 # off screen: a near crater projects far below the edge
+            fade = 1.0 - (z - 25.0) * 0.02857
+            fade = 0.0 if fade < 0.0 else 1.0 if fade > 1.0 else fade
+            gi = int(sy) - hz
+            g = gshade[gmax if gi > gmax else 0 if gi < 0 else gi]                            # ground brightness at this depth
+            isx, isy = int(sx), int(sy)
             if kind == "r":
                 rw, rh = max(2, int(w * 1.3)), max(2, int(w * 0.9))
-                body = pygame.Rect(0, 0, rw, rh)
-                body.midbottom = (int(sx), int(sy))
-                if rw < 7:                                                                  # far away: one dark dot is enough
-                    pygame.draw.ellipse(surf, (int(g - 34 * fade),) * 3, body)
+                left, bottom = isx - rw // 2, isy                                        # body sits on its ground point
+                if rw < 7:                                                               # far away: one dark dot is enough
+                    ell(surf, (int(g - 34 * fade),) * 3, (left, bottom - rh, rw, rh))
                     continue
-                if rw > 5:                                                                  # cast shadow, down-right
-                    pygame.draw.ellipse(surf, (int(g - 30 * fade),) * 3, (body.left + rw * 0.18, body.bottom - rh * 0.30, rw * 1.15, rh * 0.42))
-                pygame.draw.ellipse(surf, (int(g - 38 * fade), int(g - 38 * fade), int(g - 34 * fade)), body)
-                pygame.draw.ellipse(surf, (int(g + 22 * fade),) * 3, body.inflate(-rw * 0.42, -rh * 0.45).move(-rw // 9, -rh // 7))
+                ell(surf, (int(g - 38 * fade), int(g - 38 * fade), int(g - 34 * fade)), (left, bottom - rh, rw, rh))
+                if fade < 0.12:                                                          # too far to tell the parts apart
+                    continue
+                ell(surf, (int(g - 30 * fade),) * 3,                                                # cast shadow, down-right
+                    (left + rw * 0.18, bottom - rh * 0.30, rw * 1.15, rh * 0.42))
+                ell(surf, (int(g + 22 * fade),) * 3,
+                    (left + rw * 0.21 - rw // 9, bottom - rh + rh * 0.225 - rh // 7, rw * 0.58, rh * 0.55))
                 continue
-            h = max(2.0, w * C.CAM_HEIGHT_M / math.hypot(z, C.CAM_HEIGHT_M))
-            rect = pygame.Rect(0, 0, int(w * 2), int(h * 2))
-            rect.center = (int(sx), int(sy))
-            if rect.w < 6:
+            w2, h2 = int(w * 2), int(max(2.0, w * C.CAM_HEIGHT_M / math.hypot(z, C.CAM_HEIGHT_M)) * 2)
+            if w2 < 6:
                 continue
+            rx, ry = isx - w2 // 2, isy - h2 // 2
             if kind == "c":
-                rim = rect.inflate(int(rect.w * 0.16), int(rect.h * 0.22))
-                pygame.draw.ellipse(surf, (int(g + 26 * fade),) * 3, rim.move(0, int(rect.h * 0.05)))            # raised sunlit rim
-                pygame.draw.ellipse(surf, (int(g - 34 * fade), int(g - 34 * fade), int(g - 30 * fade)), rect)   # shadowed wall
-                floor = rect.inflate(-int(rect.w * 0.22), -int(rect.h * 0.30))
-                pygame.draw.ellipse(surf, (int(g - 12 * fade),) * 3, floor.move(int(rect.w * 0.05), int(rect.h * 0.12)))
-            else:                                                                           # a fresh impact scar: dark, with a pale ejecta apron
-                pygame.draw.ellipse(surf, (int(g + 9 * fade),) * 3, rect.inflate(int(rect.w * 0.7), int(rect.h * 0.7)))
-                pygame.draw.ellipse(surf, (int(g - 26 * fade),) * 3, rect.inflate(int(rect.w * 0.2), int(rect.h * 0.2)))
-                pygame.draw.ellipse(surf, (int(g - 50 * fade), int(g - 50 * fade), int(g - 46 * fade)), rect)
-                pygame.draw.ellipse(surf, (int(g - 34 * fade),) * 3, rect.inflate(-int(rect.w * 0.45), -int(rect.h * 0.5)).move(int(rect.w * 0.06), int(rect.h * 0.1)))
+                dw, dh = int(w2 * 0.16), int(h2 * 0.22)
+                ell(surf, (int(g + 26 * fade),) * 3,                                     # raised sunlit rim
+                    (rx - dw // 2, ry - dh // 2 + int(h2 * 0.05), w2 + dw, h2 + dh))
+                ell(surf, (int(g - 34 * fade), int(g - 34 * fade), int(g - 30 * fade)), (rx, ry, w2, h2))
+                if fade > 0.12:                                                          # shadowed wall
+                    cw, ch = int(w2 * 0.22), int(h2 * 0.30)
+                    ell(surf, (int(g - 12 * fade),) * 3, (rx + cw // 2 + int(w2 * 0.05), ry + ch // 2 + int(h2 * 0.12),
+                                                          w2 - cw, h2 - ch))
+            else:                                                                        # a fresh impact scar: dark, with a pale ejecta apron
+                if fade > 0.12:
+                    dw, dh = int(w2 * 0.7), int(h2 * 0.7)
+                    ell(surf, (int(g + 9 * fade),) * 3, (rx - dw // 2, ry - dh // 2, w2 + dw, h2 + dh))
+                    dw, dh = int(w2 * 0.2), int(h2 * 0.2)
+                    ell(surf, (int(g - 26 * fade),) * 3, (rx - dw // 2, ry - dh // 2, w2 + dw, h2 + dh))
+                ell(surf, (int(g - 50 * fade), int(g - 50 * fade), int(g - 46 * fade)), (rx, ry, w2, h2))
+                if fade > 0.12:
+                    dw, dh = int(w2 * 0.45), int(h2 * 0.5)
+                    ell(surf, (int(g - 34 * fade),) * 3, (rx + dw // 2 + int(w2 * 0.06), ry + dh // 2 + int(h2 * 0.1),
+                                                          w2 - dw, h2 - dh))
         play = not ctx.get("backdrop")
         if play:
             self.draw_impact(surf, game)
@@ -652,7 +697,7 @@ class WorldView:
         rover_at = None
         if play and not ctx.get("hide_craft"):
             c = game.craft
-            sx, sy, z = project(c.x, c.y)
+            sx, sy, z = self.project(c.x, c.y)
             if z > 1.0:
                 w = ROVER_W_M * C.CAM_FOCAL / z
                 bob = (math.sin(self.t * 17.0) * 1.3 + math.sin(self.t * 29.3) * 0.8) * self.speed01     # the suspension works while driving

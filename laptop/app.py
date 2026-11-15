@@ -26,6 +26,7 @@ from devio import pad as padmod
 from devio.connections import Connections
 from devio.keyboard_fallback import read_keys
 from devio.links import HudLink, RobotLink, TowerLink, link_thread
+from gfx.perf import PERF
 
 
 class Args:
@@ -63,6 +64,7 @@ class App:
             C.DEMO_MODE = True
         self.sim_all = self.args.sim_all
         self.t = 0.0
+        self.perf = PERF
         self.state = SharedState()
         self.bus = Bus()
         self.stop_flag = threading.Event()
@@ -123,8 +125,11 @@ class App:
             except Exception:
                 self.scaled = False
                 self.screen = pygame.display.set_mode((C.WINDOW_W, C.WINDOW_H), pygame.RESIZABLE)
-        self.canvas = pygame.Surface((C.RENDER_W, C.RENDER_H)).convert()
+        # with SCALED the renderer already copies the display surface to the window: draw straight into it
+        # and skip a full-screen blit (8 MB) every frame. Without it we need a canvas that gets scaled.
+        self.canvas = self.screen if self.scaled else pygame.Surface((C.RENDER_W, C.RENDER_H)).convert()
         self.clock = pygame.time.Clock()
+        self.flip_ms = 0.0
 
     def _start_devices(self):
         a = self.args
@@ -139,7 +144,6 @@ class App:
             field = r.field
         if a.sim_tower:
             t = sd.SimTower()
-            t.rover_in_spot = lambda: (self.game.strike or {}).get("vmax", 0.0) <= C.STRIKE_DODGE_SPEED   # stayed put = hit
             self.sim_tower = t
             self.sims.append(t)
             self.scanner.add_sim("SIM-TOWER", t.port, "tower")
@@ -232,6 +236,7 @@ class App:
             self.sm.go(S.MENU, self.t)
             self.game.reset()
             self.hud.reset(self.game)
+            self.postfx.sync()
 
     # ------------------------------------------------------------------ pads
     def _scan_pads(self):
@@ -408,11 +413,18 @@ class App:
                 pass
             return
         if a == "postfx":
-            self.postfx.level = (self.postfx.level + 1) % 3
-            self.toast("Post-processing: " + ("off", "vignette", "full")[self.postfx.level])
+            self.postfx.user_level = (self.postfx.user_level + 1) % 3
+            self.postfx.sync()
+            self.toast("Post-processing: " + ("off", "vignette", "full")[self.postfx.user_level])
             return
         if a == "debug":
             self.debug_on = not self.debug_on
+            return
+        if a == "quality":
+            mode = self.perf.cycle()
+            C.save_local(QUALITY=mode)
+            self.postfx.sync()
+            self.toast("Quality: " + mode.upper(), "ok")
             return
         if a == "estop":
             self.emergency_stop()
@@ -450,8 +462,8 @@ class App:
             self.pause.handle(self, "confirm" if a == "ap" else a)
         elif st == S.MENU:
             if a == "fire":                                            # Test shot from the menu: straight to the tower
-                ok = self.links["tower"].fire(test=True)
-                self.toast("Test shot sent to the tower" if ok else "Test shot: tower not connected, or cooling down", "warn")
+                ok = self.links["tower"].test_sweep()
+                self.toast("Tower test: sweep, then beam back down" if ok else "Test shot: tower not connected", "warn")
             else:
                 self.menu.handle(self, a)
         elif st == S.SETTINGS:
@@ -468,7 +480,7 @@ class App:
 
     KEYMAP = {pygame.K_UP: "up", pygame.K_DOWN: "down", pygame.K_LEFT: "left", pygame.K_RIGHT: "right",
               pygame.K_RETURN: "confirm", pygame.K_KP_ENTER: "confirm", pygame.K_F2: "hwcheck", pygame.K_F3: "postfx",
-              pygame.K_F4: "debug", pygame.K_F11: "fullscreen", pygame.K_m: "mute", pygame.K_c: "cam", pygame.K_x: "fire",
+              pygame.K_F4: "debug", pygame.K_F6: "quality", pygame.K_F11: "fullscreen", pygame.K_m: "mute", pygame.K_c: "cam", pygame.K_x: "fire",
               pygame.K_p: "ap", pygame.K_y: "ap", pygame.K_r: "recenter",
               pygame.K_1: "act1", pygame.K_2: "act2", pygame.K_3: "act3", pygame.K_4: "act4"}
 
@@ -609,13 +621,8 @@ class App:
     def drain_bus(self):
         for ev in self.bus.drain():
             k = ev.kind
-            if k in ("tower_warn", "tower_k"):
-                if self.sm.flying():
-                    self.game.handle(ev)
-                elif k == "tower_warn":                                 # a test shot from the menu or the tower's button
-                    self.toast("Tower: beam down, impact in %.0f s" % ev.data[0], "warn")
-                else:
-                    self.toast("Tower: %s" % {1: "K,1 hit", 0: "K,0 miss"}.get(ev.data[0] if ev.data else -1, "K"), "info")
+            if k == "tower_old_fw":
+                self.toast("Tower: old firmware on the Uno. Flash firmware/tower/tower.ino once", "bad")
             elif k == "joy_button":                                     # the joystick button is the test shot
                 self._action("fire")
             elif k == "tower_range":
@@ -790,11 +797,11 @@ class App:
         if self.fade > 0.01:
             from gfx.widgets import overlay
             overlay(cv, (0, 0, 0), 255 * self.fade * self.fade)
-        if self.scaled:
-            self.screen.blit(cv, (0, 0))
-        else:
+        t0 = now()
+        if self.canvas is not self.screen:                        # no SCALED: scale the canvas to the window
             pygame.transform.smoothscale(cv, self.screen.get_size(), self.screen)
         pygame.display.flip()
+        self.flip_ms = (now() - t0) * 1000.0                      # vertical sync wait: not the game's cost
 
     def intro_surf(self):
         if not hasattr(self, "_intro_surf"):
@@ -813,7 +820,8 @@ class App:
         rb = self.links["robot"].best()
         if rb and rb.rtt_ms is not None:
             packets.append("rover rtt %.1f ms   loss %.1f %%" % (rb.rtt_ms, rb.loss() * 100))
-        return {"fps": self.fps, "ms": self.frame_ms, "worst": self.worst_ms, "postfx": self.postfx.level, "threads": threads, "packets": packets}
+        return {"fps": self.fps, "ms": self.frame_ms, "worst": self.worst_ms, "postfx": self.postfx.level,
+                "quality": self.perf.label(), "threads": threads, "packets": packets}
 
     def frame(self, dt=None):
         """One iteration. Returns False when the app wants to quit."""
@@ -836,6 +844,7 @@ class App:
         ms = (now() - t0) * 1000.0
         self.frame_ms = 0.9 * self.frame_ms + 0.1 * ms
         self.worst_ms = max(self.worst_ms * 0.995, ms)
+        self.perf.note(ms - self.flip_ms, dt)                     # the governor watches CPU time, not the vblank wait
         self._fps_n += 1
         if now() - self._fps_t >= 1.0:
             self.fps, self._fps_n, self._fps_t = self._fps_n / (now() - self._fps_t), 0, now()
@@ -846,7 +855,7 @@ class App:
             pass
         try:
             while True:
-                self.clock.tick(60)
+                self.clock.tick(C.FPS_CAP)
                 if not self.frame():
                     break
         finally:
@@ -860,7 +869,7 @@ class App:
             time.sleep(0.06)
             self.links["robot"].send("D,0,0,0")
             self.links["robot"].send("X")
-            self.links["tower"].send("X")
+            self.links["tower"].idle()
         except Exception:
             pass
         self.stop_flag.set()

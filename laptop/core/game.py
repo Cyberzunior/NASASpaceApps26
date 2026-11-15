@@ -9,6 +9,7 @@ import config as C
 from core import nasa as nasa_mod
 from core import thermal as th
 from core.model import angdiff, bearing_to, start_pose, step_pose
+from core.tower_aim import TowerAim
 
 METERS = ("power", "oxygen", "food", "shield")
 LABELS = {"power": "Power", "oxygen": "Oxygen", "food": "Food", "shield": "Shield"}
@@ -42,6 +43,7 @@ class Game:
         self.log = log or (lambda msg: None)
         self.nasa = nasa or nasa_mod.Nasa()
         self.thermal = th.Thermal(self.nasa.diviner)
+        self.aim = TowerAim(self.tower, self.log)      # yaw 0, scan, then follow the rover (and mark asteroid spots)
         self.fx, self.toasts = [], []             # drained by the renderer / HUD
         self.practice = False
         self.intro_on = False
@@ -92,6 +94,9 @@ class Game:
         self._send_meters()
         if self.intro_on:
             self.hud.text("OUTPOST ONLINE", "")
+            self.aim.stop()                                     # beam up until the run really starts
+        else:
+            self.aim.start()
         self.spawn_sample()
         self.log("run reset%s" % (" (intro)" if self.intro_on else ""))
 
@@ -105,6 +110,7 @@ class Game:
             self.state.hold_commands = False
         self.hud.clear_text()
         self.hud.chirp()
+        self.aim.start()
         self.fx.append(("intro_end", 0, 0, ""))
 
     # ---- inputs
@@ -165,29 +171,6 @@ class Game:
             self.fx.append(("action", 0, 0, "rest"))
             return "Crew resting for %.0f s" % C.REST_S
         return ""
-
-    def handle(self, ev):
-        """One event from a device thread."""
-        kind, d = ev.kind, ev.data
-        if self.over or self.intro_on:
-            return
-        if kind == "tower_warn":                                # W,3: the beam is down on the marked spot
-            if self.strike is not None and self.strike["phase"] == "await":
-                self.strike.update(phase="warn", left=float(d[0]), mode="tower")
-            elif self.strike is None:                           # the tower's own test button: no date
-                ix, iy = self._impact_point()
-                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None, "x": ix, "y": iy, "vmax": 0.0, "test": True}
-            else:
-                return
-            self._warn()
-            self.log("asteroid warning from the tower: %.1f s" % d[0])
-        elif kind == "tower_k":                                 # K,1 hit, K,0 miss, bare K = not known
-            if self.strike is not None and self.strike["mode"] == "tower" and self.strike["phase"] == "warn":   # a K before W,3 is stale
-                r = d[0] if d else -1
-                st = self.strike or {}
-                if r == 0 and abs(st.get("bearing", 0)) > C.TOWER_HIT_BEARING_DEG:   # the fixed sensor cannot see that far sideways:
-                    r = int((self.impact_distance() or 99.0) <= C.STRIKE_HIT_M)       # the game's own rule on the on-screen point
-                self._resolve_strike(None if r < 0 else bool(r))
 
     def _warn(self):
         self.fx.append(("asteroid_warn", 0, 0, ""))
@@ -253,18 +236,18 @@ class Game:
         return c.x + math.cos(a) * C.STRIKE_LEAD_M, c.y + math.sin(a) * C.STRIKE_LEAD_M
 
     def _request_strike(self, test=False):
+        """Mark the spot (the tower's laser sits on it for the countdown), warn, and resolve when the countdown ends."""
         date = None
         imp = self.nasa.impacts
         if imp.ok and not test:
             date = imp.events[self.strike_i % len(imp.events)]["date"]
+        elif test:
+            date = imp.test_event["date"]                                    # the database entry for the test shot
         bearing = 0 if test else int(round(random.uniform(-C.ASTEROID_CONE_DEG, C.ASTEROID_CONE_DEG)))   # never behind the rover
         ix, iy = self._impact_point(bearing)
         self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy, "vmax": 0.0, "test": test,
                        "bearing": bearing}
-        if self.tower.connected and self.tower.fire(test=test, bearing=bearing):  # F sent: wait for the tower's W,3
-            self.strike.update(phase="await", left=C.STRIKE_W_TIMEOUT_S, mode="tower")
-        else:                                                   # no tower: the same warning from our own timer
-            self._warn()
+        self._warn()
         return True
 
     def impact_distance(self):
@@ -275,11 +258,14 @@ class Game:
         return math.hypot(st["x"] - self.craft.x, st["y"] - self.craft.y)
 
     def _resolve_strike(self, hit=None):
-        """hit True / False is the tower's answer (K,1 / K,0). None = no tower: a hit unless the rover drove faster than
-        STRIKE_DODGE_SPEED of full speed during the countdown."""
+        """hit True / False forces the result. None: with the tower connected (the spot is on the floor) a hit means the rover is inside
+        STRIKE_HIT_M of the marked spot; without it, a hit unless the rover drove faster than STRIKE_DODGE_SPEED of full speed."""
         st = self.strike or {}
         if hit is None:
-            hit = st.get("vmax", 0.0) <= C.STRIKE_DODGE_SPEED
+            if self.tower.connected:
+                hit = (self.impact_distance() or 0.0) <= C.STRIKE_HIT_M
+            else:
+                hit = st.get("vmax", 0.0) <= C.STRIKE_DODGE_SPEED
         self.strike = None
         self.hud.clear_text()
         if not st.get("test"):                                  # a scheduled strike: move on to the next real impact flash
@@ -390,13 +376,10 @@ class Game:
             s["left"] -= dt
             if s["phase"] == "warn":
                 s["vmax"] = max(s["vmax"], abs(speed) if st.drive_enabled else 0.0)
-            if s["phase"] == "await" and s["left"] <= 0:       # no W,3 within 8 s of F: warn from our own timer
-                s.update(phase="warn", left=C.STRIKE_WARN_S, mode="own")
-                self._warn()
-            elif s["phase"] == "warn" and s["mode"] == "own" and s["left"] <= 0:
+            if s["left"] <= 0:
                 self._resolve_strike()
-            elif s["phase"] == "warn" and s["mode"] == "tower" and s["left"] <= -C.STRIKE_K_TIMEOUT_S:
-                self._resolve_strike()                          # K never came: the no-tower rule
+        s = self.strike
+        self.aim.update(dt, self.craft, (s["x"], s["y"]) if s and s["phase"] == "warn" else None)
 
         # first meter to fail, and the hearts it costs
         for k in METERS:

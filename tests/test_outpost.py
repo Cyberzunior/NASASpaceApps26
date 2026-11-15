@@ -70,6 +70,8 @@ def test_protocol_letters_with_two_meanings_are_told_apart_by_field_count():
     assert P.decode("P") == ("PICKUP",) and P.decode("P,5,100") == ("P", 5, 100)
     assert P.decode("W,3") == ("WARN", 3.0)
     assert P.decode("K,1") == ("K", 1) and P.decode("K,0") == ("K", 0) and P.decode("K") == ("K", -1)
+    assert P.decode("Y,-12.5") == ("Y", -12.5) and P.decode("T,90") == ("T", 90.0) and P.decode("H") == ("HOME",) and P.decode("H,3") == ("H", 3)
+    assert P.decode("D,1.5,90") == ("ARRIVED", 1.5, 90.0) and P.decode("S,1.5,90,1,0") == ("S", 1.5, 90.0, 1, 0)
     assert P.decode("J,-40,100,1") == ("J", -40, 100, 1) and P.decode("J") == ("JIGGLE",)
     assert P.decode("Z,2") == ("Z", 2) and P.decode("Z") == ("UP",)
     assert P.decode("R") == ("R",) and P.decode("R,57") == ("RANGE", 57.0)
@@ -183,27 +185,6 @@ def test_rb_is_the_test_shot_like_the_x_key_and_the_actions_moved_off_it():
     assert app._button(C.BTN_ACTIONS[3]) == "act4"                      # right-stick click took over rest crew
 
 
-def test_joystick_lines_reach_the_mixer_with_invert_flags_and_the_button_is_the_test_shot():
-    from devio.links import HudLink
-    st, bus = SharedState(), Bus()
-    link = HudLink(st, bus, lambda m: None)
-    link.handle(("J", 50, 100, 0))
-    assert st.joy == (1.0, 0.5)                            # (speed, turn): y is forward, x is right
-    C.JOY_INVERT_X = C.JOY_INVERT_Y = True
-    try:
-        link.handle(("J", 50, 100, 0))
-        assert st.joy == (-1.0, -0.5)
-    finally:
-        C.JOY_INVERT_X = C.JOY_INVERT_Y = False
-    link.handle(("J", 0, 0, 1))
-    link.handle(("J", 0, 0, 1))                            # held: one press, not two
-    assert [e.kind for e in bus.drain()] == ["joy_button"]
-    g, _ = make_game()
-    g.intro_on = False
-    assert g.fire_test_asteroid() and g.strike["date"] is None and g.strike["test"]
-
-
-# ---------------------------------------------------------------- samples
 def test_samples_spawn_within_40_degrees_of_the_heading_never_behind():
     g, _ = make_game()
     random.seed(3)
@@ -339,8 +320,8 @@ def test_without_the_tower_a_strike_hits_unless_the_rover_drove_faster_than_30_p
         assert g.next_strike_t > g.t                             # the next real impact flash is scheduled
 
 
-def test_tower_f_then_w3_then_k1_is_a_hit_and_k0_is_dodged():
-    for k, shield, dodged in ((1, 55.0, 0), (0, 80.0, 1)):
+def test_with_the_tower_a_strike_hits_only_a_rover_inside_the_marked_spot():
+    for far, hit in ((False, True), (True, False)):
         tower = Rec(connected=True)
         g, st = make_game(tower=tower)
         g.intro_on = False
@@ -348,42 +329,76 @@ def test_tower_f_then_w3_then_k1_is_a_hit_and_k0_is_dodged():
         g.m["shield"] = 80.0
         g.next_strike_t = 0.0
         g.step(0.05)
-        assert ("fire",) in tower.sent and g.strike["phase"] == "await"      # F sent at the scheduled time
-        assert not any(e[0] == "asteroid_warn" for e in g.fx)                # no banner until the beam is down
-        g.step(2.0)                                                          # the tower is still swinging the beam
-        assert g.strike["phase"] == "await"
-        g.handle(Event("tower_warn", (3.0,)))
-        assert g.strike["phase"] == "warn" and g.strike["left"] == 3.0 and any(e[0] == "asteroid_warn" for e in g.fx)
-        g.handle(Event("tower_k", (k,)))
-        assert g.strike is None and g.m["shield"] == shield and g.near_misses == dodged
+        assert g.strike["phase"] == "warn" and any(e[0] == "asteroid_warn" for e in g.fx)   # the banner starts at once
+        assert any(c[0] == "aim" for c in tower.sent)                                      # the beam is sent to the spot
+        if far:
+            g.strike["x"], g.strike["y"] = g.craft.x + 50.0, g.craft.y                    # the spot is nowhere near the rover
+        else:
+            g.craft.x, g.craft.y = g.strike["x"], g.strike["y"]                           # the rover drove into the marked spot
+        for _ in range(int(C.STRIKE_WARN_S / 0.1) + 3):
+            g.step(0.1)
+        assert g.strike is None and g.m["shield"] == (55.0 if hit else 80.0) and g.near_misses == (0 if hit else 1)
         assert g.next_strike_t > g.t
 
 
-def test_no_w_within_8_seconds_of_f_runs_the_warning_on_the_games_own_timer():
+def test_tower_geometry_yaw_pitch_and_servo():
+    from core import tower_aim as TA
+    from core.model import start_pose
+    p = start_pose()
+    tx, ty = TA.tower_xy()
+    assert math.isclose(math.hypot(p.x - tx, p.y - ty), C.TOWER_BACK_CM * C.METERS_PER_CM)
+    ahead = math.radians(p.theta)
+    d = 40.0 * C.METERS_PER_CM
+    yaw, below = TA.angles(p.x + d * math.cos(ahead), p.y + d * math.sin(ahead))          # straight ahead of the rover
+    assert abs(yaw) < 1e-6 and math.isclose(below, C.TOWER_GAIN * math.degrees(math.atan2(C.TOWER_LASER_H_CM, C.TOWER_BACK_CM + 40.0)))
+    right = math.radians(p.theta + 90)                                                      # to the rover's right: a positive yaw
+    yaw, _ = TA.angles(p.x + d * math.cos(right), p.y + d * math.sin(right))
+    assert 0 < yaw < 90
+    assert TA.servo_for(-90) == C.TOWER_PITCH_LEVEL + 90 * C.TOWER_PITCH_DIR and TA.servo_for(0) == C.TOWER_PITCH_LEVEL
+    far = TA.angles(p.x + 1e6, p.y)[0]
+    assert abs(far) <= C.TOWER_YAW_LIMIT_DEG
+
+
+def test_run_start_scans_left_and_right_for_three_seconds_then_locks_on_the_rover():
+    from core.tower_aim import angles
     tower = Rec(connected=True)
     g, st = make_game(tower=tower)
     g.intro_on = False
-    g.next_storm_t = 1e9
-    g.next_strike_t = 0.0
-    g.step(0.05)
-    for _ in range(79):
+    g.aim.start()
+    g.next_strike_t = g.next_storm_t = 1e9
+    assert tower.sent[-1][:2] == ("aim", 0.0)                                              # yaw 0 at the start
+    yaws = []
+    for _ in range(int(C.TOWER_SCAN_S / 0.1)):
+        tower.sent.clear()
         g.step(0.1)
-    assert g.strike["phase"] == "await"
-    g.step(0.2)
-    assert g.strike["phase"] == "warn" and g.strike["mode"] == "own"
-    for _ in range(32):
-        g.step(0.1)
-    assert g.strike is None and g.strikes == 1
+        yaws += [c[1] for c in tower.sent if c[0] == "aim"]
+    assert min(yaws) < -C.TOWER_SCAN_DEG * 0.9 and max(yaws) > C.TOWER_SCAN_DEG * 0.9 and yaws.index(min(yaws)) < yaws.index(max(yaws))
+    tower.sent.clear()
+    g.craft.x += 8.0
+    g.step(0.1)
+    g.step(0.1)
+    last = [c for c in tower.sent if c[0] == "aim"][-1]
+    assert math.isclose(last[1], angles(g.craft.x, g.craft.y)[0], abs_tol=0.01)           # locked on the rover
 
 
-def test_tower_test_button_shows_the_warning_without_a_date_and_keeps_the_schedule():
-    g, _ = make_game()
-    g.intro_on = False
-    nxt = g.next_strike_t
-    g.handle(Event("tower_warn", (3.0,)))
-    assert g.strike["phase"] == "warn" and g.strike["date"] is None
-    g.handle(Event("tower_k", (0,)))
-    assert g.strike is None and g.near_misses == 1 and g.next_strike_t == nxt
+def test_tower_link_sends_yaw_and_servo_only_when_the_aim_changes():
+    from devio.links import TowerLink
+    sent = []
+    t = TowerLink(SharedState(), Bus(), print)
+    t.connected = True
+    t.send = lambda line: sent.append(line) or True
+    assert t.aim(10.0, 40.0, force=True) and sent == ["Y,10.0", "T,%d" % round(C.TOWER_PITCH_LEVEL - C.TOWER_PITCH_DIR * 40.0)]
+    sent.clear()
+    t.aim(10.1, 40.1, force=True)                                                           # under TOWER_MIN_STEP_DEG: nothing
+    assert sent == []
+    t.aim(20.0, None, force=True)
+    assert sent == ["Y,20.0"]
+    sent.clear()
+    t.idle()
+    assert sent == ["Y,0", "T,%d" % (C.TOWER_PITCH_LEVEL - 90 * C.TOWER_PITCH_DIR)]
+    t.set_armed(False)
+    sent.clear()
+    assert t.aim(5.0, 5.0, force=True) is False and sent == []                             # emergency stop: no more aiming
 
 
 def test_scheduled_warnings_carry_the_real_impact_date():
@@ -420,19 +435,27 @@ def test_the_temperature_is_always_the_diviner_replay_and_goes_to_the_hud_panel(
     assert not hasattr(g.thermal, "on_reading")                            # nothing can feed it a reading
 
 
-def test_hud_link_sends_v_once_a_second_only_while_connected():
+def test_hud_link_sends_the_frame_once_and_only_the_changes_after():
     from devio.links import HudLink
     sent = []
     link = HudLink(SharedState(), Bus(), lambda m: None)
     link.send = lambda line: sent.append(line) or True
-    link.set_temp(117.6)
+    link.set_meters(80, 65, 70, 40)
     link.connected = False
     link.tick()
-    assert not [l for l in sent if l.startswith("V,")]
+    assert not sent                                                        # nothing goes out while the panel is not connected
     link.best = lambda: object.__new__(type("T", (), {"name": "x", "rtt_ms": 1.0, "fw": 2, "loss": lambda self: 0.0}))
     link.tick()
+    first = list(sent)
+    assert "L,PWR 80   O2 65 |FOOD70  SHLD40 " in first and "OP" in first and "BZ,0,0,0" in first
     link.tick()
-    assert [l for l in sent if l.startswith("V,")] == ["V,118"]            # one line, not one per tick
+    assert sent == first                                                   # a steady screen sends nothing new
+    link.set_zone(4)
+    link.tick()
+    assert sent[len(first):] and "L,ASTEROID|DRIVE CLEAR!" in sent[len(first):]
+    link.resync()
+    link.tick()
+    assert sent.count("OP") == 2                                           # a fresh link gets the whole screen again
 
 
 def test_storms_come_from_nasa_events_or_the_timer_and_drain_shield():
@@ -496,35 +519,32 @@ def test_devices_connect_report_lost_and_the_tower_warns_before_it_fires():
         robot.latch(True)
         assert wait(lambda: sim.latched, 2.0)
         robot.latch(False)
-        # HUD panel lines
+        # HUD panel lines (protocol 2: the laptop draws, the panel shows)
         hud.pickup()
         hud.set_meters(80, 65, 70, 40)
         hud.set_lives(12)
         hud.set_samples(3)
         sh = net.sim_hud
-        assert wait(lambda: sh.pickups == 1 and sh.meters == (80, 65, 70, 40) and sh.lives == 12 and sh.samples == 3, 3.0)
-        assert sh.lcd() == ("PWR 80  O2 65 ", "FOOD 70  SHLD 40 ")
-        hud.set_temp(118.0)                                               # V,tempC once a second
-        assert wait(lambda: sh.temp_c == 118.0, 3.0)
-        # joystick: J,x,y,sw reaches the shared state, the button posts one test shot
-        sh.set_stick(50, 100, 0)
-        assert wait(lambda: net.state.joy == (1.0, 0.5), 2.0)
-        net.drain()
-        sh.set_stick(0, 0, 1)
+        assert wait(lambda: sh.chirps >= 1 and sh.lcd() == ("PWR 80   O2 65  ", "FOOD70  SHLD40  ") and sh.oled_pushes >= 1, 3.0)
+        assert any("BASE 12/15" in l for l in sh.oled) and any("SAMPLES 3" in l for l in sh.oled)
+        hud.set_temp(118.0)
+        assert hud.r.temp_c == 118.0                                       # kept for the game; the panel shows no temperature
+        # tower: v3 firmware. Y / T move the motors, D says both arrived, the speeds and the idle pose went out on connect
+        stw = net.sim_tower
+        assert wait(lambda: tower.driver_ok is True, 3.0)
+        assert wait(lambda: stw.yaw == 0.0 and stw.servo == C.TOWER_PITCH_LEVEL - 90 * C.TOWER_PITCH_DIR, 4.0)   # idle: beam down, yaw 0
+        assert stw.yaw_sps == C.TOWER_YAW_SPS
+        tower.last_d = -1.0
+        assert tower.aim(-30.0, 45.0, force=True)
+        assert wait(lambda: abs(stw.yaw - C.TOWER_YAW_DIR * -30.0) < 0.2 and tower.last_d > 0, 5.0)
+        assert stw.servo == round(C.TOWER_PITCH_LEVEL - C.TOWER_PITCH_DIR * 45.0)
+        tower.laser(False)
+        assert wait(lambda: not stw.laser, 2.0)
+        tower.idle()
+        assert wait(lambda: stw.yaw == 0.0, 4.0)
+        stw.press_button()                                                # the tower's own button is a test shot
         evs = []
         assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "joy_button" for e in evs), 2.0)
-        assert sum(e.kind == "joy_button" for e in evs) == 1
-        sh.set_stick(0, 0, 0)
-        # tower: F -> W,3 then K,1 (rover still in the spot), then K,0 (it left)
-        tower.allow(True)
-        for in_spot in (True, False):
-            net.sim_tower.rover_in_spot = in_spot
-            C.TOWER_COOLDOWN_S = 0.3                                      # shortened here; the real rest is 22 s
-            assert wait(lambda: tower.fire(), 4.0)
-            evs = []
-            assert wait(lambda: evs.extend(net.drain()) or any(e.kind == "tower_k" for e in evs), 5.0)
-            got = [(e.kind, e.data[0]) for e in evs if e.kind in ("tower_warn", "tower_k")]
-            assert got == [("tower_warn", 0.0), ("tower_k", 1 if in_spot else 0)], got
         tower.ask_range()
         assert wait(lambda: tower.last_range == 60.0, 2.0)
         assert tower.connected                                            # pings were answered all the way through
@@ -614,7 +634,7 @@ def test_whole_game_headless_wasd_intro_pickup_gameover_and_restart():
         g.sample.update(x=g.craft.x, y=g.craft.y, kind="mineral")
         frames(app, 3)
         assert sum(g.samples.values()) >= 1
-        assert wait(lambda: app.sim_hud.pickups >= 1 or True, 1.0)
+        assert wait(lambda: app.sim_hud.chirps >= 1 or True, 1.0)
         g.hearts = 1
         g.m["oxygen"] = 0.0
         for _ in range(900):
@@ -665,9 +685,9 @@ def test_rover_sketch_is_one_drv8833_with_a_slew_limit_and_no_tb6612_or_hcsr04()
     s = read("firmware", "robot", "robot.ino")
     code = re.sub(r"//.*", "", s)
     assert "L_IN1 = 5, L_IN2 = 6, R_IN1 = 9, R_IN2 = 10" in s and "AccelStepper pan(AccelStepper::HALF4WIRE, 4, 8, 7, 12)" in s
-    for bad in ("TB6612", "PWMA", "AIN1", "BIN1", "STBY", "TRIG", "ECHO", "pulseIn", "STOP_CM", "S,"):
+    for bad in ("TB6612", "PWMA", "AIN1", "BIN1", "STBY", "TRIG", "ECHO", "pulseIn", "STOP_CM", "LASER", "TOWER"):
         assert bad not in code, bad
-    assert "void stopAll()" in code and "CMD_TIMEOUT = 300" in code and "PAN_LIMIT = 90" in code
+    assert "void stopAll()" in code and "CMD_TIMEOUT = 300" in code and "PAN_LIMIT = 90" in code and "applySettings" in code and "LED," in s
     assert "SLEW = 40" in code and "SLEW_MS = 20" in code and "ONE dual DRV8833" in s and C.MAX_PWM == 200
     assert not re.search(r"pinMode\s*\(\s*(L_IN|R_IN)", code)
 
@@ -675,25 +695,26 @@ def test_rover_sketch_is_one_drv8833_with_a_slew_limit_and_no_tb6612_or_hcsr04()
 def test_hud_sketch_matches_the_pin_table():
     s = read("firmware", "hud_panel", "hud_panel.ino")
     code = re.sub(r"//.*", "", s)
-    assert "GREEN = 3, BLUE = 4, RED = 5, YELLOW = A0, BUZZER = 7" in s and "JOY_X = A1, JOY_Y = A2, JOY_SW = 6" in s
-    assert "LiquidCrystal lcd(8, 9, 10, 11, 12, 13)" in s and "0x3C" in s and "tone(BUZZER, want)" in s
-    for f in ("1200", "2000", "400", "I,hud,2", 'Serial.print("J,")', "now - tJoy >= 33", "pinMode(JOY_SW, INPUT_PULLUP)"):
-        assert f in s, f
-    assert "PN2222" not in s and "5 blinks" in s and "Serial.print(\"W,\")" not in code
+    assert "LED_G = 3, LED_R = 5, LED_Y = A0, ARGB = 4, BUZZER = 7" in s
+    assert "LiquidCrystal lcd(8, 9, 10, 11, 12, 13)" in s and "0x3C" in s
+    for f in ('"I,hud,2"', '"Q,"', "tone(BUZZER, 1200, 120)", "tone(BUZZER, bzHz, bzOn)", "NO LINK", "LINK_TIMEOUT_MS = 3000", "oled.display()"):
+        assert f in code or f in s, f
+    assert "A1" not in code and "A2" not in code and "JOY" not in code and "J," not in code       # no joystick in this sketch
+    assert "PN2222" not in s and "PICKUP" not in code and "GAME OVER" not in code                 # no game in the firmware
 
 
-def test_tower_sketch_is_the_uno_r3_laser_tower_and_speaks_the_suites_line_protocol():
+def test_tower_sketch_is_a_game_free_serial_driven_pan_tilt_laser():
     s = read("firmware", "tower", "tower.ino")
     code = re.sub(r"//.*", "", s)
     assert "AccelStepper yaw(AccelStepper::HALF4WIRE, 4, 6, 5, 7)" in s
     assert "BTN_PIN = 2, SERVO_PIN = 9, TRIG = 11, ECHO = 12, LASER = 13" in s and "digitalWrite(LASER, HIGH)" in s
-    assert code.count("digitalWrite(LASER") == 1                               # on from power-up, never switched again
-    for line in ('F("I,tower,2")', 'F("W,3")', 'F("K,1")', 'F("K,0")', 'F("R,")', '"Z")', '"R")'):
+    for line in ('F("I,tower,2")', 'F("D,")', 'F("S,")', 'F("R,")', 'F("B,1")', "s[0] == 'Y'", "s[0] == 'T'", "s[0] == 'L'", "s[0] == 'G'",
+                 '"H")', '"O")', '"R")', '"?")'):
         assert line in code, line
-    assert "yaw.setCurrentPosition(0)" in code and "pitch.write(PITCH_UP)" in code and "goIdle()" in code
-    assert "COOLDOWN_MS" in code and "cooling()" in code and "fireSequence(s[1] ? atoi(s + 2) : 0)" in code
-    assert "service()" in code and "LED" not in code.replace("LASER", "")      # pings answered mid-sequence, no armed LED
-    assert "if (digitalRead(BTN_PIN) == LOW" in code and "fireSequence(0);" in code
+    for game in ('F("W,3")', "K,1", "fireSequence", "COOLDOWN", "LEAD_CM", "LASER_H_CM", "PITCH_DIR", "YAW_DIR"):      # no game logic in the firmware
+        assert game not in code, game
+    assert "yaw.setCurrentPosition(0)" in code and "pitch.write(SERVO_START)" in code
+    assert "pump()" in code and "yaw.run()" in code and "LED" not in code.replace("LASER", "")   # one non-blocking loop, pings answered while moving
 
 
 def test_robot_bridge_selftest():

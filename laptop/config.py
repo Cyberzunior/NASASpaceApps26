@@ -44,12 +44,16 @@ METERS_PER_CM = 0.25     # game metres per real centimetre: 12 cm/s = 3 m/s on s
 # ---- Camera pan (28BYJ-48 on a ULN2003)
 PAN_LIMIT_DEG = 90.0
 PAN_SPEED_DEG_S = 60.0
+ROVER_MIN_PWM = 60          # TT motors stall below this duty (0 = off): sent to the rover with G on connect
+ROVER_SLEW = 40             # PWM counts per 20 ms the rover may change by (MB102 current)
+ROVER_CMD_TIMEOUT_MS = 300  # the rover stops this long after the last D
+ROVER_PAN_ACC_STEPS = 1500  # camera stepper acceleration, steps/s^2
 
 # ---- Connections (saved by the menu's Connections bar)
 HUD_PORT = ""            # "COM4"
 TOWER_PORT = ""          # "COM5"
 ROBOT_ADDR = "192.168.1.50:5005"
-CAMERA_URL = ""          # "http://192.168.1.50:8080/stream"
+CAMERA_URL = "0"         # the USB webcam (device 0); or a stream URL like "http://192.168.1.50:8080/stream"
 AUTO_SCAN = False        # also probe every serial port by itself (off: the Connections bar decides)
 UDP_PORT = 5005
 PING_MS = 500
@@ -60,7 +64,6 @@ FW_VERSION = 2
 SERIAL_BAUD = 115200
 SERIAL_SCAN_S = 3.0
 SIM_ROBOT_DELAY_MS = 40
-SIM_TOWER_K_MS = 120
 WIFI_SSID = ""
 WIFI_PASSWORD = ""
 
@@ -108,23 +111,36 @@ SAMPLE_REGOLITH_SHIELD = 15.0
 SAMPLE_MINERAL_POWER = 10.0
 SAMPLE_SCORE = 100
 
-# ---- Asteroid strikes (the tower warns, then fires)
-TOWER_HIT_BEARING_DEG = 8     # the tower only checks a hit within this bearing of straight ahead (firmware HIT_BEARING_DEG)
+# ---- Asteroid strikes (the tower marks the spot with its laser, the game counts down and decides)
 ASTEROID_CONE_DEG = 40       # each impact lands at a bearing uniform in +-this of the rover heading, never behind it
 STRIKE_FIRST_S = 7.0         # the first strike is this long after the run starts
 STRIKE_WARN_S = 3.0
 STRIKE_RADIUS_M = 7.0       # marked spot radius at the start of the warning (shrinks toward the impact)
-STRIKE_HIT_M = 3.0          # the marked spot radius at impact
-STRIKE_LEAD_M = 4.0         # the spot is marked this far ahead of the rover (the tower's LEAD_CM on screen)
-STRIKE_W_TIMEOUT_S = 8.0    # no W,3 this long after F: run the warning on the game's own timer
+STRIKE_HIT_M = 3.0          # the marked spot radius at impact: with the tower connected a rover inside it is hit
+STRIKE_LEAD_M = 4.0         # the spot is marked this far ahead of the rover
 STRIKE_DODGE_SPEED = 0.30   # no tower: a strike is a hit unless the rover drove faster than this fraction of full speed
 STRIKE_DODGE_SCORE = 50
 STRIKE_MIN_GAP_S = 25.0
 STRIKE_MAX_GAP_S = 60.0
 STRIKE_S_PER_DAY = 2.0        # real days between two observed impact flashes -> game seconds (clamped)
-STRIKE_K_TIMEOUT_S = 2.0      # tower said warn but K never came: resolve by the no-tower rule
-TOWER_MIN_FIRE_GAP_S = 2.0
-TOWER_COOLDOWN_S = 22.0       # the tower (laser, servo, stepper) rests this long after each K before it takes another F (firmware COOLDOWN_MS is 20 s)
+
+# ---- Tower aiming (firmware/tower/tower.ino is flashed once; every angle below is worked out here and sent over serial)
+# The tower stands TOWER_BACK_CM behind the rover's start point, looking the way the rover faces at the start (parallel lines of
+# sight). At the start of a run it yaws to 0, sweeps left and right for TOWER_SCAN_S, then locks on the rover and follows it.
+TOWER_BACK_CM = 60.0         # real cm from the tower to the rover's start point, straight behind it
+TOWER_LASER_H_CM = 20.0      # laser height above the floor: MEASURE THIS (a farther spot means a flatter beam)
+TOWER_MIN_CM, TOWER_MAX_CM = 15.0, 200.0   # the spot is kept inside this range from the tower
+TOWER_YAW_DIR = 1            # -1 if positive bearings (to the right of the tower) swing the wrong way
+TOWER_YAW_LIMIT_DEG = 80.0   # never yaw further than this either side
+TOWER_PITCH_LEVEL = 90       # servo angle with the beam level
+TOWER_PITCH_DIR = 1          # -1 if raising the servo angle lowers the beam. Straight up = LEVEL + 90 * DIR
+TOWER_SCAN_S = 3.0           # the look left and right at the start of a run
+TOWER_SCAN_DEG = 25.0        # how far the scan swings either side
+TOWER_GAIN = 3.0            # x3 sensitivity: every yaw and pitch angle the game sends is multiplied by this
+TOWER_MARK_DOWN_DEG = 35.0   # while an asteroid spot is marked the beam is pitched at least this far below level
+TOWER_TRACK_HZ = 10.0        # at most this many aim updates a second while following
+TOWER_MIN_STEP_DEG = 0.5     # smaller changes are not sent
+TOWER_YAW_SPS, TOWER_YAW_ACC, TOWER_SERVO_MS = 800, 800, 12   # stepper steps/s, steps/s^2, servo ms per degree (sent as G on connect)
 
 # ---- Radiation storms (NASA DONKI)
 STORM_GAP_MIN_S = 30.0
@@ -154,9 +170,11 @@ RESTART_TO_PLAY = True
 BEST_TIME = 0.0
 MASTER_VOLUME = 0.7
 POSTFX = 1                 # low: vignette only (0 off, 1 low, 2 full); set in Settings
+QUALITY = "auto"           # auto / low / balanced / high: how hard the renderer may work; set in Settings
+FPS_CAP = 60               # the loop ticks this often; the governor keeps the CPU part of a frame under it
 RENDER_W = 1920
 RENDER_H = 1080
-FULLSCREEN = False
+FULLSCREEN = True          # start full screen (the view F11 gives); --windowed or F11 to leave it
 WINDOW_W = 1600
 WINDOW_H = 900
 VSYNC = True

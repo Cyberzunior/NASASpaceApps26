@@ -2,7 +2,7 @@
 (so the real link code runs), the tower and the HUD panel over a fake serial port (so the real handshake runs).
 
 SimRobot integrates the SAME model as the game, has the firmware's 300 ms timeout and the X/R latch, and records the wheel
-values and camera pan it was given. SimTower answers F with W,secs then K,1 or K,0. SimHud is the HUD panel firmware: it
+values and camera pan it was given. SimTower is the v3 pan/tilt firmware (Y, T, L, R, ?). SimHud is the HUD panel firmware: it
 keeps the LCD text, LEDs, buzzer and OLED numbers the real one would show and sends the joystick as J,x,y,sw."""
 import collections
 import math
@@ -118,37 +118,38 @@ class SimRobot(_UdpDevice):
 
 
 class SimTower(threading.Thread):
-    """Tower firmware: F (or its button) -> W,3 once the beam is down, a 3 s countdown, then K,1 (the rover is still in the
-    marked spot) or K,0. `rover_in_spot` stands in for the distance reading. Over a fake serial port."""
+    """Tower firmware v3: a serial-driven pan/tilt laser. Y,deg / T,deg move the simulated stepper and servo (at the speeds G sets),
+    D comes back when both arrive, R answers range_cm, ? answers S. Over a fake serial port."""
     role = "tower"
+    STEPS_PER_DEG = 4096.0 / 360.0
 
-    def __init__(self, hub_port=None, k_ms=None, warn_s=None):
+    def __init__(self, hub_port=None, **_):
         super().__init__(daemon=True, name="sim-tower")
         self.port = FakeSerial(self)
         self.stop_flag = threading.Event()
-        self.k_delay = (C.SIM_TOWER_K_MS if k_ms is None else k_ms) / 1000.0
-        self.warn_s = 3.0 if warn_s is None else warn_s       # the real tower waits 3 s; tests shorten it
-        self.rover_in_spot = True                             # callable or bool: is the rover still in the marked spot?
         self.range_cm = 60.0
-        self.last_fire = -99.0
-        self.shots = self.jiggles = self.ups = 0
-        self.bearings = []                                    # the bearing of every F received
-        self.pending = []
+        self.yaw = 0.0                                        # degrees now, 0 = power-up
+        self.yaw_target = 0.0
+        self.servo = 180.0                                    # SERVO_START
+        self.servo_target = 180.0
+        self.laser = True
+        self.yaw_sps, self.servo_ms = 800.0, 15.0
+        self.arrived_sent = True
+        self.targets = []                                     # every (kind, value) command received, for the tests
+        self.coils_off = False
         self.rx = bytearray()
         self.sent = []
+        self._t = now()
 
     def out(self, line):
         self.sent.append(line)
         self.port.feed_from_device(line)
 
     def press_button(self):
-        self._shot(now())
+        self.out("B,1")
 
-    def _shot(self, t):
-        if not self.pending and t - self.last_fire >= 1.5:
-            self.last_fire = t
-            self.out("W,%d" % round(self.warn_s))
-            self.pending.append(t + self.warn_s + self.k_delay)
+    def moving(self):
+        return abs(self.yaw - self.yaw_target) > 1e-6 or abs(self.servo - self.servo_target) > 1e-6
 
     def feed(self, data):
         self.rx += data
@@ -163,24 +164,38 @@ class SimTower(threading.Thread):
                 self.out("I,tower,%d" % P.FW)
             elif k == "P":
                 self.out(P.encode("Q", m[1], m[2]))
-            elif k == "F":
-                self.bearings.append(m[1] if len(m) > 1 else 0)
-                self._shot(now())
-            elif k == "JIGGLE":
-                self.jiggles += 1
-            elif k == "UP":
-                self.ups += 1
+            elif k == "Y":
+                self.yaw_target = max(-100.0, min(100.0, m[1]))
+                self.targets.append(("Y", m[1]))
+                self.arrived_sent = False
+            elif k == "T":
+                self.servo_target = max(0.0, min(180.0, round(m[1])))
+                self.targets.append(("T", m[1]))
+                self.arrived_sent = False
+            elif k == "L":
+                self.laser = m[1] != "0"
+            elif k == "HOME":
+                self.yaw = self.yaw_target = 0.0
+            elif k == "O":
+                self.coils_off = True
+            elif k == "G":
+                self.yaw_sps, self.servo_ms = max(50.0, min(1000.0, m[1])), float(m[3])
             elif k == "R":
                 self.out("R,%.0f" % self.range_cm)
+            elif k == "?":
+                self.out("S,%.1f,%d,%d,%d" % (self.yaw, round(self.servo), 1 if self.laser else 0, 1 if self.moving() else 0))
 
     def run(self):
         while not self.stop_flag.is_set():
             t = now()
-            while self.pending and self.pending[0] <= t:
-                self.pending.pop(0)
-                self.shots += 1
-                hit = self.rover_in_spot() if callable(self.rover_in_spot) else self.rover_in_spot
-                self.out("K,%d" % (1 if hit else 0))
+            dt, self._t = t - self._t, t
+            dy = self.yaw_sps / self.STEPS_PER_DEG * dt            # degrees the stepper can turn this tick
+            self.yaw += max(-dy, min(dy, self.yaw_target - self.yaw))
+            ds = dt * 1000.0 / self.servo_ms if self.servo_ms > 0 else 1e9
+            self.servo += max(-ds, min(ds, self.servo_target - self.servo))
+            if not self.arrived_sent and not self.moving():
+                self.arrived_sent = True
+                self.out("D,%.1f,%d" % (self.yaw, round(self.servo)))
             time.sleep(0.01)
 
     def stop(self):
@@ -216,31 +231,24 @@ class FakeSerial:
 
 
 class SimHud(threading.Thread):
-    """HUD panel firmware (UNO Q) in Python. Z sets the hot / cold state, V is the lunar temperature the laptop sends once
-    a second, and the joystick goes out as J,x,y,sw every 33 ms (set it with set_stick())."""
+    """HUD panel firmware (protocol 2) in Python. It keeps what the real panel would show: the two LCD rows, the LED bits,
+    the ARGB pixel, the buzzer pattern, the chirps and the OLED frame. It answers I?, P and ? like the real one."""
     role = "hud"
 
     def __init__(self):
         super().__init__(daemon=True, name="sim-hud")
         self.port = FakeSerial(self)
         self.stop_flag = threading.Event()
-        self.stick = (0, 0, 0)                     # x, y, sw
-        self.temp_c = None
-        self.temps = 0
-        self.zone = 0
-        self.lives = C.LIVES
-        self.samples = 0
-        self.meters = (0, 0, 0, 0)
-        self.over = False
-        self.text = None
-        self.pickups = 0
+        self.rows = ["HUD PANEL".ljust(16), "WAITING...".ljust(16)]
+        self.led = (0, 0, 0)                       # on, blink, ms
+        self.pixel = (0, 0, 0, 0)                  # r, g, b, ms
+        self.buzzer = (0, 0, 0)                    # hz, on ms, period ms
         self.chirps = 0
+        self.oled = []                             # frame as drawn: list of (op, args)
+        self.oled_frame = []
+        self.oled_pushes = 0
         self.rx = bytearray()
-        self.t_j = 0.0
         self.got = []
-
-    def set_stick(self, x=0, y=0, sw=0):
-        self.stick = (int(x), int(y), int(sw))
 
     def feed(self, data):
         self.rx += data
@@ -250,56 +258,48 @@ class SimHud(threading.Thread):
             self._line(line.decode("ascii", "ignore").strip())
 
     def lcd(self):
-        if self.over:
-            return ("OUTPOST LOST", "")
-        if self.text is not None:
-            return self.text
-        if self.zone == 2:
-            return ("!! HOT !!", "COOLING %dC" % round(self.temp_c or 0))
-        if self.zone == 1:
-            return ("!! COLD !!", "HEATING %dC" % round(self.temp_c or 0))
-        p, o, f, s = self.meters
-        return ("PWR %-3d O2 %-3d" % (p, o), "FOOD %-3d SHLD %-3d" % (f, s))
+        return tuple(self.rows)
 
     def _line(self, s):
         self.got.append(s)
-        raw_kind = s.split(",", 1)[0]
-        m = P.decode(s)
-        if m is None:
-            if raw_kind == "L":
-                body = s[2:]
-                self.text = tuple((body.split("|") + [""])[:2]) if body else None
+        if not s:
             return
-        k = m[0]
-        if k == "I?":
+        if s == "I?":
             self.port.feed_from_device("I,hud,%d" % P.FW)
-        elif k == "P":
-            self.port.feed_from_device(P.encode("Q", m[1], m[2]))
-        elif k == "PICKUP":
-            self.pickups += 1
-        elif k == "BZ":
+        elif s == "?":
+            self.port.feed_from_device("S,%d,0" % 1)
+        elif s[0] == "P" and s[1:2] == ",":
+            self.port.feed_from_device("Q" + s[1:])
+        elif s.startswith("LD,"):
+            f = [int(x) for x in s[3:].split(",")]
+            self.led = tuple(f[:3])
+        elif s == "L" or s == "L,":
+            self.rows = ["".ljust(16), "".ljust(16)]
+        elif s.startswith("L,"):
+            l1, _, l2 = s[2:].partition("|")
+            self.rows = [l1[:16].ljust(16), l2[:16].ljust(16)]
+        elif s.startswith("N,"):
+            f = [int(x) for x in s[2:].split(",")]
+            self.pixel = tuple(f[:4])
+        elif s == "BZ":
             self.chirps += 1
-        elif k == "Z":
-            self.zone = m[1]
-        elif k == "V":
-            self.temp_c, self.temps = m[1], self.temps + 1
-        elif k == "H":
-            self.lives = m[1]
-        elif k == "E":
-            self.samples = m[1]
-        elif k == "M":
-            self.meters = tuple(m[1:])
-        elif k == "G":
-            self.over = True
-        elif k == "R":
-            self.over, self.lives, self.samples, self.zone, self.text = False, C.LIVES, 0, 0, None
+        elif s.startswith("BZ,"):
+            hz, on, per = [int(x) for x in s[3:].split(",")]
+            if hz and on and not per:
+                self.chirps += 1                  # one beep: the chirp
+            else:
+                self.buzzer = (hz, on, per)
+        elif s == "OC":
+            self.oled_frame = []
+        elif s == "OP":
+            self.oled = list(self.oled_frame)
+            self.oled_pushes += 1
+        elif s[:2] in ("OT", "OR", "OH", "OI"):
+            self.oled_frame.append(s)
 
     def run(self):
         while not self.stop_flag.is_set():
-            if now() - self.t_j >= 0.033:
-                self.t_j = now()
-                self.port.feed_from_device("J,%d,%d,%d" % self.stick)
-            time.sleep(0.01)
+            time.sleep(0.05)
 
     def stop(self):
         self.stop_flag.set()

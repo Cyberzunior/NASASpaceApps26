@@ -4,6 +4,7 @@ import random
 import numpy as np
 import pygame
 import config as C
+from gfx.perf import PERF
 
 
 def _smooth_noise(w, h, seed, cells=(14, 8)):
@@ -67,17 +68,24 @@ class Starfield:
         """pan (pixels): every star shifts by the same amount and wraps, the way a sky turns when the viewer turns."""
         surf.blit(self.bg, (0, 0))
         w = self.w
+        col = surf.fill
+        t = self.t
+        sin = math.sin
+        step = max(1, int(round(1.0 / max(0.05, PERF.k["stars"]))))       # density knob: draw every Nth star
+        ox, oy = off
         for layer in self.layers:
             speed, size, bright = layer[-3], layer[-2], layer[-1]
             par = speed / 16.0
-            for s in layer[:-3]:
-                tw = 0.65 + 0.35 * math.sin(self.t * s[3] * 2 + s[2])
+            stars = layer[:-3]
+            for i in range(0, len(stars), step):
+                s = stars[i]
+                tw = 0.65 + 0.35 * sin(t * s[3] * 2 + s[2])
                 v = int(bright * tw)
                 if pan is None:
-                    x, y = int(s[0] + off[0] * par - shift[0] * par * 20), int(s[1] + off[1] * par - shift[1] * par * 20)
+                    x, y = int(s[0] + ox * par - shift[0] * par * 20), int(s[1] + oy * par - shift[1] * par * 20)
                 else:
                     x, y = int(s[0] + pan) % w, int(s[1])
-                surf.fill((v, v, min(255, v + 12)), (x, y, size, size))
+                col((v, v, min(255, v + 12)), (x, y, size, size))
         if self.shoot:
             x, y, vx, vy, life = self.shoot
             n = math.hypot(vx, vy)

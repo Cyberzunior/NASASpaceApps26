@@ -464,67 +464,126 @@ class RobotTab(Tab):
 
 # ----------------------------------------------------------------------- tower
 class TowerTab(Tab):
+    """The tower is a plain serial-driven pan/tilt laser (firmware/tower/tower.ino v3): every button here sends the same lines the
+    game sends (Y yaw, T servo, L laser, H, O, G, R, ?) and the tower answers D, S and R."""
     checks = (
-        "Armed LED is on after R",
-        "F is answered by K",
-        "Exactly one ball drops per F",
-        "Board does not reset when the servo moves",
-        "X disarms: armed LED off and F is ignored",
-        "Test button on the tower fires one ball",
-        "Ball reaches the robot area in 2-3 s",
+        "Laser is on at power-up and stays on",
+        "I? is answered by I,tower,2 and pings are answered while the head moves",
+        "Y,-30 swings the beam left, Y,30 right (else set TOWER_YAW_DIR = -1 in laptop/config.py)",
+        "T,90 holds the beam level; T,180 points it straight up (else TOWER_PITCH_DIR = -1 / TOWER_PITCH_LEVEL)",
+        "D arrives once the head stops (both motors there)",
+        "Y,0 returns to the power-up heading, H re-zeroes it",
+        "R shows a sane distance for a hand in front of the sensor, 999 when nothing is there",
+        "Scan (3 s left and right) is smooth and the laser dot stays on the floor",
+        "L,0 / L,1 switch the laser off and on",
+        "O releases the stepper coils (the head turns freely by hand)",
+        "Test button on D2 (if fitted) shows B,1 in the log",
     )
+    UP = 180                      # servo angle for a beam straight up with the default wiring (TOWER_PITCH_LEVEL + 90 * TOWER_PITCH_DIR)
 
     def __init__(self, links):
         super().__init__(links)
         self.link = links["tower"]
-        self.sent = self.acks = 0
-        self.t_fire = None
+        self.steps = []
         lay = QtWidgets.QVBoxLayout(self)
-        self.safe = QtWidgets.QCheckBox("Line of fire is clear: nobody in front of the tower")
+        self.safe = QtWidgets.QCheckBox("Laser path is clear: nobody looks into the beam, the idle beam hits an empty ceiling")
         lay.addWidget(self.safe)
-        self.fire = QtWidgets.QPushButton("FIRE  (F)")
-        self.fire.setMinimumHeight(70)
-        self.fire.setEnabled(False)
-        self.fire.setStyleSheet("QPushButton{background:#b3261e; color:white; font-size:24px; font-weight:bold;}"
-                                "QPushButton:disabled{background:#e6b9b6; color:#888;}")
-        self.safe.toggled.connect(self.fire.setEnabled)
-        self.fire.clicked.connect(self._fire)
-        lay.addWidget(self.fire)
+        self.controls = QtWidgets.QWidget()
+        lay.addWidget(self.controls)
+        cl = QtWidgets.QVBoxLayout(self.controls)
+        self.safe.toggled.connect(self.controls.setEnabled)
+        self.controls.setEnabled(False)
+
+        self.yaw = self._slider(cl, "Yaw (Y,deg)", -90, 90, 0, lambda v: self.link.send(f"Y,{v}"))
+        self.servo = self._slider(cl, "Servo (T,deg)", 0, 180, self.UP, lambda v: self.link.send(f"T,{v}"))
+
         row = QtWidgets.QHBoxLayout()
-        for label, line in (("Arm (R)", "R"), ("Disarm (X)", "X")):
+        for label, fn in (("Beam up", self._up), ("Level", lambda: self.servo.setValue(90)), ("Yaw 0", lambda: self.yaw.setValue(0)),
+                          ("Scan 3 s", self._scan), ("Laser on", lambda: self.link.send("L,1")), ("Laser off", lambda: self.link.send("L,0"))):
+            b = QtWidgets.QPushButton(label)
+            b.clicked.connect(lambda _, fn=fn: fn())
+            row.addWidget(b)
+        cl.addLayout(row)
+        row = QtWidgets.QHBoxLayout()
+        for label, line in (("Range (R)", "R"), ("State (?)", "?"), ("Here is yaw 0 (H)", "H"), ("Coils off (O)", "O")):
             b = QtWidgets.QPushButton(label)
             b.clicked.connect(lambda _, line=line: self.link.send(line))
             row.addWidget(b)
-        lay.addLayout(row)
-        self.stats = QtWidgets.QLabel()
-        lay.addWidget(self.stats)
-        lay.addWidget(hint("The optional pan servo takes A,angle: type it in the send box under the log."))
+        cl.addLayout(row)
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel("Speeds G:"))
+        self.g = [QtWidgets.QSpinBox() for _ in range(3)]
+        for box, (lo, hi, val, tip) in zip(self.g, ((50, 1000, 800, "stepper steps/s"), (50, 4000, 800, "stepper steps/s^2"),
+                                                   (0, 100, 12, "servo ms per degree"))):
+            box.setRange(lo, hi)
+            box.setValue(val)
+            box.setToolTip(tip)
+            row.addWidget(box)
+        send_g = QtWidgets.QPushButton("Send G")
+        send_g.clicked.connect(lambda: self.link.send("G," + ",".join(str(b.value()) for b in self.g)))
+        row.addWidget(send_g)
+        cl.addLayout(row)
+
+        self.readout = big("-")
+        lay.addWidget(self.readout)
+        lay.addWidget(hint("The game does the same: it works out yaw and servo from where the rover is and streams Y and T at 10 Hz. "
+                           "Flash firmware/tower/tower.ino once; nothing else changes on the board."))
         lay.addWidget(self.checklist())
         lay.addStretch(1)
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self._tick)
         self.link.line_received.connect(self._on_line)
-        self._show()
 
-    def _show(self, extra=""):
-        self.stats.setText(f"F sent: {self.sent}    K received: {self.acks}    {extra}")
+    def _slider(self, lay, label, lo, hi, val, send):
+        row = QtWidgets.QHBoxLayout()
+        row.addWidget(QtWidgets.QLabel(label))
+        sl = QtWidgets.QSlider(Qt.Horizontal)
+        sl.setRange(lo, hi)
+        sl.setValue(val)
+        num = QtWidgets.QLabel(str(val))
+        num.setMinimumWidth(36)
+        sl.valueChanged.connect(lambda v: (num.setText(str(v)), send(v)))
+        row.addWidget(sl)
+        row.addWidget(num)
+        lay.addLayout(row)
+        return sl
 
-    def _fire(self):
-        if self.link.send("F"):
-            self.sent += 1
-            self.t_fire = time.monotonic()
-            self._show("waiting for K ...")
+    def _up(self):
+        self.yaw.setValue(0)
+        self.servo.setValue(self.UP)
+
+    def _scan(self):
+        """Yaw 0 -> left 25 -> right 25 -> 0 over 3 s, the way the game does at the start of a run."""
+        import math
+        self.steps = [(i * 0.1, -25.0 * math.sin(2 * math.pi * i * 0.1 / 3.0)) for i in range(31)]
+        self.t0 = time.monotonic()
+        self.timer.start(50)
+
+    def _tick(self):
+        t = time.monotonic() - self.t0
+        while self.steps and self.steps[0][0] <= t:
+            _, yaw = self.steps.pop(0)
+            self.yaw.setValue(int(round(yaw)))
+        if not self.steps:
+            self.timer.stop()
 
     def _on_line(self, line):
-        if line.strip() != "K":
-            return
-        self.acks += 1
-        if self.t_fire is None:
-            self._show("K without F (test button)")
-        else:
-            self._show(f"F to K: {(time.monotonic() - self.t_fire) * 1000:.0f} ms")
-            self.t_fire = None
+        line = line.strip()
+        if line.startswith("S,"):
+            p = line[2:].split(",")
+            if len(p) == 4:
+                self.readout.setText(f"yaw {p[0]} deg   servo {p[1]}   laser {'on' if p[2] == '1' else 'off'}   {'moving' if p[3] == '1' else 'still'}")
+        elif line.startswith("D,"):
+            self.readout.setText(f"arrived: yaw {line[2:].split(',')[0]} deg, servo {line[2:].split(',')[-1]}")
+        elif line.startswith("R,"):
+            cm = line[2:]
+            self.readout.setText("range: nothing there (999)" if cm.strip() == "999" else f"range: {cm} cm")
 
     def stop(self):
+        self.timer.stop()
         self.safe.setChecked(False)
+        self.link.send("Y,0", quiet=True)
+        self.link.send(f"T,{self.UP}", quiet=True)
 
 
 # ----------------------------------------------------------------------- bench
@@ -924,7 +983,6 @@ class MainWindow(QtWidgets.QMainWindow):
         for _, page in self.pages:
             page.stop()
         self.links["robot"].send("D,0,0,0", quiet=True)
-        self.links["tower"].send("X")
         self.log("STOP ALL")
 
     def save_report(self):

@@ -4,6 +4,7 @@ Sparks draw as cached soft glow dots (additive); smoke draws as soft alpha puffs
 import math
 import random
 import pygame
+from gfx.perf import PERF
 
 _dots = {}
 _puffs = {}
@@ -46,8 +47,9 @@ class Particles:
 
     def emit(self, x, y, n, color, speed=90.0, life=(0.3, 0.8), size=(1.5, 3.5), spread=6.283, angle=0.0,
              kind="spark", drag=0.0):
+        cap = min(self.cap, PERF.k["parts"])
         for _ in range(n):
-            if len(self.p) >= self.cap:
+            if len(self.p) >= cap:
                 break
             a = angle + random.uniform(-spread / 2, spread / 2)
             v = random.uniform(0.25, 1.0) * speed

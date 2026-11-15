@@ -141,13 +141,16 @@ class MenuScreen:
 
 
 class SettingsScreen:
-    ITEMS = ("Master volume", "Post-processing", "Skip intro", "After game over", "Back")
+    ITEMS = ("Master volume", "Post-processing", "Quality", "Skip intro", "After game over", "Back")
 
     def __init__(self):
         self.list = MenuList([(i, "") for i in self.ITEMS])
 
     def value(self, k):
-        return [("%d%%" % round(C.MASTER_VOLUME * 100)), ("OFF", "VIGNETTE", "FULL")[C.POSTFX], "ON" if C.SKIP_INTRO else "OFF",
+        from gfx.perf import PERF
+        quality = ("AUTO: " + PERF.tier.upper()) if C.QUALITY == "auto" else C.QUALITY.upper()
+        return [("%d%%" % round(C.MASTER_VOLUME * 100)), ("OFF", "VIGNETTE", "FULL")[C.POSTFX], quality,
+                "ON" if C.SKIP_INTRO else "OFF",
                 "straight back to PLAY" if C.RESTART_TO_PLAY else "go to MENU", ""][k]
 
     def change(self, app, d):
@@ -156,10 +159,14 @@ class SettingsScreen:
             C.save_local(MASTER_VOLUME=round(max(0.0, min(1.0, C.MASTER_VOLUME + 0.1 * d)), 2))
         elif i == 1:
             C.save_local(POSTFX=(C.POSTFX + d) % 3)
-            app.postfx.level = C.POSTFX
+            app.postfx.user_level = C.POSTFX
+            app.postfx.sync()
         elif i == 2:
-            C.save_local(SKIP_INTRO=not C.SKIP_INTRO)
+            C.save_local(QUALITY=app.perf.cycle())
+            app.postfx.sync()
         elif i == 3:
+            C.save_local(SKIP_INTRO=not C.SKIP_INTRO)
+        elif i == 4:
             C.save_local(RESTART_TO_PLAY=not C.RESTART_TO_PLAY)
         app.audio.play("click")
 
@@ -366,7 +373,7 @@ class HwCheckScreen:
         ("pan", "Camera pans left and right", "manual"),
         ("camera", "Camera picture is live", "auto"),
         ("tower_link", "Tower connected", "auto"),
-        ("tower_fire", "Tower: beam down (W,3), then K,1 or K,0", "auto"),
+        ("tower_fire", "Tower: beam swings left and right, tower answers D", "auto"),
         ("hud_link", "HUD panel connected, joystick lines arriving", "auto"),
         ("leds", "HUD LEDs: yellow blinks on pickup, red hot, blue cold", "manual"),
         ("buzzer", "HUD buzzer: fast high beeps hot, low beeps cold", "manual"),
@@ -421,12 +428,11 @@ class HwCheckScreen:
             if not t.connected:
                 app.toast("Tower not connected", "bad")
                 return
-            t.allow(True)
-            if t.fire(test=True):
+            if t.test_sweep():
                 self.fire_t = now()
-                app.toast("Test shot: the beam swings down, then W,3 and K", "warn")
+                app.toast("Tower test: sweep, then beam back down", "warn")
             else:
-                app.toast("Tower stopped or fired within 2 s", "warn")
+                app.toast("Tower stopped (emergency stop)", "warn")
         elif key == "8":
             if not t.connected:
                 app.toast("Tower not connected", "bad")
@@ -458,7 +464,7 @@ class HwCheckScreen:
             st["robot_link"] = True
         if snap["tower"][0]:
             st["tower_link"] = True
-        if self.fire_t > 0 and app.links["tower"].last_k > self.fire_t:
+        if self.fire_t > 0 and app.links["tower"].last_d > self.fire_t:
             st["tower_fire"] = True
         if snap["hud"][0] and now() - app.state.joy_t < 1.0:
             st["hud_link"] = True

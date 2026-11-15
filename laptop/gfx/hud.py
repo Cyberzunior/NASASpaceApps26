@@ -235,13 +235,14 @@ class Hud:
                  ("2", "Greenhouse", "-%d PWR  +%d FOOD later" % (game.nasa.veggie.power, C.GREENHOUSE_FOOD)),
                  ("3", "Shield boost", "-%d PWR  +%d SHLD" % (C.SHIELD_BOOST_POWER, C.SHIELD_BOOST_GAIN)),
                  ("4", "Rest crew", "stop %d s  +%d O2 +%d FOOD" % (C.REST_S, C.REST_OXYGEN, C.REST_FOOD)))
+        cols = (METER_COLORS["oxygen"], METER_COLORS["food"], METER_COLORS["shield"], K.mix(K.CYAN, K.GREEN, 0.5))   # the meter each action feeds
         for i, (key, name, desc) in enumerate(items):
             key = ("A", "X", "L", "R3")[i] if pad_on else key              # 8BitDo Ultimate (Switch): A, X, L bumper, right-stick click
             x = r.left + 20 + i * 210
             if i:
                 pygame.draw.line(surf, (40, 62, 104), (x - 12, r.top + 14), (x - 12, r.top + 74))
-            keycap(surf, (x, r.top + 14), key, not locked)
-            fonts.text(surf, name, (x + 40, r.top + 16), 20, K.DIM if locked else K.WHITE, bold=True)
+            keycap(surf, (x, r.top + 14), key, not locked, color=cols[i])
+            fonts.text(surf, name, (x + 40, r.top + 16), 20, K.DIM if locked else cols[i], bold=True)
             fonts.text(surf, desc, (x, r.top + 54), 13, K.DIM if locked else K.mix(K.GREY, K.WHITE, 0.3))
         pygame.draw.line(surf, (40, 62, 104), (r.left + 16, r.bottom - 40), (r.right - 16, r.bottom - 40))
         c = K.GREEN if ap_on else K.GREY
@@ -288,7 +289,8 @@ class Hud:
             fonts.text(surf, "ROVER CAM  [C]", (rect.right - 6, rect.bottom + 15), 14, K.GREY, bold=True, anchor="topright", track=1)
 
     def debug(self, surf, info):
-        lines = ["FPS %5.1f   frame %5.1f ms   worst %5.1f ms   postfx %d" % (info["fps"], info["ms"], info["worst"], info["postfx"])]
+        lines = ["FPS %5.1f   frame %5.1f ms   worst %5.1f ms   postfx %d   quality %s"
+                 % (info["fps"], info["ms"], info["worst"], info["postfx"], info.get("quality", "auto"))]
         lines += ["%-8s %s" % (k, v) for k, v in info["threads"].items()]
         lines += info["packets"]
         r = pygame.Rect(C.RENDER_W // 2 - 330, 140, 660, 24 + 21 * len(lines))
