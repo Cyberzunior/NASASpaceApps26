@@ -1,4 +1,4 @@
-"""T-Minus_6 settings. Committed defaults live here; personal overrides (Wi-Fi, camera URL, calibration)
+"""T-Minus_6 settings. Committed defaults live here; personal overrides (connections, calibration, NASA key)
 go in config.local.json next to this file (git-ignored). Every number in the game is a value in this file.
 
 Use:  import config as C ; C.V_MAX          Change + save:  C.save_local(V_MAX=14.2)"""
@@ -8,50 +8,46 @@ import os
 # ---- Gamepad (numbers differ by OS and driver: run tools/gamepad_test.py and fix them here or in config.local.json)
 AXIS_TURN = 0            # left stick left/right
 AXIS_SPEED = 1           # left stick up/down (up is negative)
+AXIS_PAN = 2             # right stick left/right: camera pan
 AXIS_BRAKE = 4           # left trigger  (-1 released .. 1 pressed), -1 = not used
 AXIS_BOOST = 5           # right trigger
-BTN_CONFIRM = 0          # A
+BTN_CONFIRM = 0          # A (menus)
 BTN_CAMERA = 1           # B
-BTN_FIRE = 2             # X (practice mode only)
 BTN_AUTOPILOT = 3        # Y
 BTN_BACK = 6             # Back / View: Hardware Check
-BTN_RESTART = 7          # Start: pause, restart, hold 2 s to re-sync
+BTN_RESTART = 7          # Start: pause, restart
+BTN_ACTIONS = [0, 2, 4, 5]   # while playing: A scrubber, X greenhouse, LB shield boost, RB rest crew
 DEAD_ZONE = 0.08
 EXPO = 0.25              # stick response curve: 0 = linear, 1 = cubic
-TRIGGER_BASE = 1.0       # speed scale with no trigger pressed; boost raises it to 1.0, brake lowers it to 0.5
-INPUT_HZ = 120           # gamepad / mixer thread rate
+TRIGGER_BASE = 1.0
+INPUT_HZ = 120
 RUMBLE = True
 
-# ---- Movement model (measure with tools/calibrate_robot.py)
-V_MAX = 15.0             # cm/s at full stick
-W_MAX = 90.0             # deg/s at full turn
+# ---- Movement model (measure with tools/calibrate_robot.py: 2 motors and a caster turn differently from 4 wheels)
+V_MAX = 12.0             # cm/s at full stick (placeholder for the 2WD rover: re-measure)
+W_MAX = 110.0            # deg/s at full turn (placeholder for the 2WD rover: re-measure)
 TURN_GAIN = 0.6          # K in left = speed + K*turn, right = speed - K*turn
-MAX_PWM = 255
-SEND_HZ = 50             # D lines per second
-CMD_EPS = 0.03           # send at once when speed or turn moved more than this
-SYNC_DELAY_MS = 0        # delay the screen craft so it matches the robot's real motion (0 = instant)
-DRIFT_CORRECTION = 0.5   # 0..1: how hard a bumper contact pulls the robot ghost onto the debris it hit
+MAX_PWM = 170            # TT motors are 6 V parts on a 9 V pack: every motor command is scaled to this
+INVERT_LEFT = False      # True if the left motor is wired backwards
+INVERT_RIGHT = False
+SEND_HZ = 50
+CMD_EPS = 0.03
+SYNC_DELAY_MS = 0
+METERS_PER_CM = 0.25     # game metres per real centimetre: 12 cm/s = 3 m/s on screen
 
-# ---- Board (cm). Earth at the centre; angles: 0 = right, 90 = bottom (player side), clockwise on screen
-BOARD_W = 120.0
-BOARD_H = 80.0
-EARTH_R = 7.5
-ORBIT_R = 28.0           # the spec's 40 cm ring does not fit an 80 cm board; raise this on a bigger board
-ORBIT_DIR = 1            # 1 = clockwise seen from above, -1 = counter-clockwise
-START_ANGLE = 270.0
-CRAFT_R = 5.0
-SCENARIO_FILE = "scenario.json"
+# ---- Camera pan (28BYJ-48 on a ULN2003)
+PAN_LIMIT_DEG = 90.0
+PAN_SPEED_DEG_S = 60.0
 
-# ---- Links and discovery
+# ---- Connections (saved by the menu's Connections bar)
+HUD_PORT = ""            # "COM4"
+TOWER_PORT = ""          # "COM5"
+ROBOT_ADDR = "192.168.1.50:5005"
+CAMERA_URL = ""          # "http://192.168.1.50:8080/stream"
+AUTO_SCAN = False        # also probe every serial port by itself (off: the Connections bar decides)
 UDP_PORT = 5005
-ROBOT_ADDR = None        # "192.168.43.50" or "ip:port": skips discovery
-TOWER_ADDR = None
-WEATHER_PORT = None      # "COM4": skips the serial scan
-CAMERA_URL = None        # "http://<ip>:81/stream" (ESP32-CAM) or the phone app's URL
-WIFI_SSID = ""           # only documentation for the team; put the real ones in config.local.json
-WIFI_PASSWORD = ""
 PING_MS = 500
-LINK_TIMEOUT_S = 2.0
+LINK_TIMEOUT_S = 2.0     # no answer for this long = "lost"
 RTT_WARN_MS = 80.0
 LOSS_WARN = 0.05
 FW_VERSION = 2
@@ -59,79 +55,104 @@ SERIAL_BAUD = 115200
 SERIAL_SCAN_S = 3.0
 SIM_ROBOT_DELAY_MS = 40
 SIM_TOWER_K_MS = 120
+WIFI_SSID = ""
+WIFI_PASSWORD = ""
 
-# ---- Robot sensors on the map
-USE_ROBOT_SCAN = True    # turn S,angle,cm readings into hazards
-SCAN_SIGN = 1            # -1 if the turret's positive angle is to the left
-SENSOR_FWD = 6.0         # ultrasonic sensor distance ahead of the robot centre, cm
-SCAN_MAX_CM = 100.0
-DETECT_TTL_S = 3.0       # a detected object is forgotten this long after the last echo
-
-# ---- Lives and hits
+# ---- Base integrity
 LIVES = 15
-SHIELD_S = 1.5
 
-# ---- Asteroids and the tower
-ASTEROID_R = 1.5
-ASTEROID_SPEED = 25.0    # cm/s: the paper ball's measured speed
-ASTEROID_WARN_S = 1.0
-ASTEROID_GAP_S = 6.0     # minimum time between asteroids
-ASTEROID_GAP_JITTER_S = 4.0
-ASTEROID_K_TIMEOUT_S = 0.25
-LANE_WIDTH = 16.0        # an asteroid can only hit while it is this close (total width) to the orbit ring
-TOWER_HAS_PAN = True
+# ---- Meters (each 0..100). Drain intervals are seconds per point.
+START_POWER = 100.0
+START_OXYGEN = 100.0
+START_FOOD = 100.0
+START_SHIELD = 50.0
+OXYGEN_DRAIN_S = 4.0
+FOOD_DRAIN_S = 6.0
+POWER_DRAIN_REST_S = 5.0
+POWER_DRAIN_DRIVE_S = 2.0
+POWER_RECHARGE_S = 2.0   # one point per this many seconds, stopped in daylight
+HEART_LOSS_S = 5.0       # oxygen, food (or power at night) at 0: one heart per this many seconds
+STRIKE_SHIELD = 25.0
+STRIKE_METER_DROP = 20.0
+
+# ---- Actions (keys 1..4)
+SCRUBBER_POWER = 10.0
+SCRUBBER_OXYGEN = 15.0
+GREENHOUSE_POWER = 10.0  # replaced by the NASA Veggie numbers when data/nasa/veggie_facts.json exists
+GREENHOUSE_OXYGEN = 5.0
+GREENHOUSE_FOOD = 15.0
+GREENHOUSE_DELAY_S = 8.0
+SHIELD_BOOST_POWER = 15.0
+SHIELD_BOOST_GAIN = 20.0
+REST_S = 5.0
+REST_OXYGEN = 5.0
+REST_FOOD = 5.0
+GAME_SECONDS_PER_DAY = 0.4    # Veggie: days to harvest -> grow delay in game seconds
+WATTS_PER_POWER_POINT = 7.0   # Veggie: about 70 W -> 10 power points
+
+# ---- Samples
+SAMPLE_CONE_DEG = 40.0
+SAMPLE_MIN_M = 8.0
+SAMPLE_MAX_M = 20.0
+SAMPLE_PICKUP_M = 1.8
+SAMPLE_BEHIND_DEG = 90.0
+SAMPLE_BEHIND_S = 3.0
+SAMPLE_ICE_OXYGEN = 15.0
+SAMPLE_REGOLITH_SHIELD = 15.0
+SAMPLE_MINERAL_POWER = 10.0
+SAMPLE_SCORE = 100
+
+# ---- Asteroid strikes (the tower warns, then fires)
+STRIKE_WARN_S = 3.0
+STRIKE_MIN_GAP_S = 25.0
+STRIKE_MAX_GAP_S = 60.0
+STRIKE_S_PER_DAY = 2.0        # real days between two observed impact flashes -> game seconds (clamped)
+STRIKE_K_TIMEOUT_S = 2.0      # tower said warn but K never came: resolve anyway
 TOWER_MIN_FIRE_GAP_S = 2.0
 TOWER_REST_DEG = 20
 TOWER_PUSH_DEG = 100
 TOWER_PUSH_MS = 350
-AIM_CENTER_DEG = 90.0    # pan servo angle that points the ramp at Earth
-AIM_GAIN = 1.0           # servo degrees per degree of bearing (-1 flips the direction)
-AIM_TABLE = []           # optional [[bearing_deg, servo_deg], ...] from calibration; overrides the two numbers above
 
-# ---- Weather
-HOT_C = 30.0
-COLD_C = 18.0
-HYST_C = 1.0
-HOT_ZONE = [135.0, 225.0]    # sunlit arc of the ring, degrees
-COLD_ZONE = [315.0, 45.0]    # Earth's shadow arc
-COLD_LED_COLOR = "blue"      # the station has a separate blue LED for cold (an early note said red)
-SPIKE_C = 3.0
-SPIKE_WINDOW_S = 10.0
-ZONE_KEEPALIVE_S = 2.0
-WEATHER_LOG_S = 5.0
-WEATHER_TURN_PENALTY = 0.2   # turn rate lost in a hot or cold zone (0 = off)
-SPACE_WEATHER = True         # the station pot picks a real NASA DONKI solar flare that sets the orbit swing
-NASA_API_KEY = "DEMO_KEY"    # free key from api.nasa.gov (DEMO_KEY: a few calls an hour); put yours in config.local.json
-SPACE_WEATHER_DAYS = 30      # how far back the flare list goes
+# ---- Radiation storms (NASA DONKI)
+STORM_GAP_MIN_S = 30.0
+STORM_GAP_MAX_S = 45.0
+STORM_SHIELD_DRAIN_S = 2.0    # shield points per second
+STORM_HEART_S = 3.0
+STORM_DUR_C = 8.0
+STORM_DUR_M = 15.0
+STORM_DUR_X = 25.0
+STORM_DUR_SEP = 20.0
+STORM_DUR_DEFAULT = 15.0
+NASA_API_KEY = "DEMO_KEY"
 
-# ---- Auto-pilot
-AP_CRUISE = 0.8
-AP_NUDGE = 0.3
-AP_WARN_CM = 40.0
-AP_DANGER_CM = 25.0
-AP_WARN_SPEED = 0.7
-AP_DANGER_SPEED = 0.4
-AP_SAFE_CM = 3.0
-AP_HORIZON_S = 3.0
-AP_CLEAR_S = 1.0
+# ---- Temperature: DHT11 mapped onto the LRO Diviner range
+SENSOR_COLD_C = 10.0          # DHT11 reading that means lunar night minimum
+SENSOR_HOT_C = 45.0           # DHT11 reading that means lunar day maximum
+THERMAL_HOT_FRAC = 0.70       # above this fraction of the night-to-day range: hot (cooling doubles power drain)
+THERMAL_COLD_FRAC = 0.30      # below this fraction: cold (heating doubles power drain)
+THERMAL_HYST = 0.03
+DIVINER_SITE = "equator"      # "equator" or "south_pole": which table sets the range
+DAY_CLOCK_S = 180.0           # one lunar day and night
+DAY_START_H = 8.0             # local lunar time (0..24, 6 = sunrise, 18 = sunset) when a run starts
+SENSOR_TIMEOUT_S = 10.0       # no valid DHT11 reading for this long: simulated temperature
 
-# ---- Screen, sound, misc
+# ---- Intro and misc
+SKIP_INTRO = False
+INTRO_S = 5.0
+RESTART_TO_PLAY = False
+BEST_TIME = 0.0
+MASTER_VOLUME = 0.7
+POSTFX = 2
 RENDER_W = 1920
 RENDER_H = 1080
 FULLSCREEN = False
 WINDOW_W = 1600
 WINDOW_H = 900
 VSYNC = True
-POSTFX = 2               # 0 off, 1 light, 2 full
-MASTER_VOLUME = 0.7
 DEMO_MODE = False
-BEST_TIME = 0.0          # best seconds survived, saved by the game
-RESTART_TO_PLAY = False  # after game over, Start goes straight back to PLAY
+PX_PER_M = 34.0
 PRIVACY_NO_SAVE_FRAMES = True
 LOG_KEEP = 20
-# Demo mode script: [seconds, action]. Actions: "asteroid", "hot", "cold", "normal"
-DEMO_SCRIPT = [[8, "asteroid"], [20, "hot"], [28, "normal"], [34, "asteroid"], [46, "cold"], [54, "normal"],
-               [60, "asteroid"]]
 
 # ----------------------------------------------------------------------------------------------------------------
 HERE = os.path.dirname(os.path.abspath(__file__))
