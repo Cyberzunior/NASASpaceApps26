@@ -6,13 +6,13 @@ Fetched by `tools/fetch_nasa_data.py` on 2026-11-14. The game reads these files 
 - URL: https://api.nasa.gov/DONKI/FLR?startDate=<start>&endDate=<end>&api_key=<NASA_API_KEY>
 - Fetched: 2026-11-14
 - Used for: radiation storms (solar flares)
-- Status: NOT AVAILABLE: no events returned. 2026-10-15..2026-11-14: tartDate=2026-10-15&endDate=2026-11-14&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests; 2026-09-15..2026-11-14: tartDate=2026-09-15&endDate=2026-11-14&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests; 2026-07-17..2026-09-15: tartDate=2026-07-17&endDate=2026-09-15&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests
+- Status: NOT AVAILABLE (no file saved). api.nasa.gov answered HTTP 404 `{"status":404,"path":"/DONKI-API/get/FLR/"}` for every window tried on 2026-11-14 (last 30 days, 60-day windows, other months), so no flares could be fetched. The game keeps radiation storms on its built-in timer with no NASA label. Retry with `python tools/fetch_nasa_data.py --only donki --key <your key>`; the endpoint may work later.
 
 ## donki_sep.json
 - URL: https://api.nasa.gov/DONKI/SEP?startDate=<start>&endDate=<end>&api_key=<NASA_API_KEY>
 - Fetched: 2026-11-14
 - Used for: radiation storms (solar energetic particle events)
-- Status: NOT AVAILABLE: no events returned. 2026-10-15..2026-11-14: tartDate=2026-10-15&endDate=2026-11-14&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests; 2026-09-15..2026-11-14: tartDate=2026-09-15&endDate=2026-11-14&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests; 2026-07-17..2026-09-15: tartDate=2026-07-17&endDate=2026-09-15&api_key=DEMO_KEY: HTTP Error 429: Too Many Requests
+- Status: NOT AVAILABLE (no file saved). The last 30 days (2026-10-15 to 2026-11-14) returned HTTP 200 with an empty list `[]`: no SEP events in that window. Wider windows were then blocked by the DEMO_KEY rate limit (HTTP 429). Retry with `--key <your own key>` to look further back (the API allows 60 days per call). Until a file exists the game keeps storms on its built-in timer with no NASA label.
 
 ## diviner_equator.csv
 - URL: https://pds-geosciences.wustl.edu/lro/urn-nasa-pds-lro_diviner_derived1/data_derived_gcp/global_cumul_avg_cyl_00n10n_002.tab  (HTTP Range, bytes 78105713-78116560: 96 rows of the 156 MB table)
