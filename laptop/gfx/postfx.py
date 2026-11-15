@@ -67,7 +67,7 @@ class PostFx:
             return
         self.frame += 1
         if self.level >= 2:
-            if self.frame % 2 == 0 or damage > 0.05:
+            if self.frame % 3 == 0 or damage > 0.05:                  # the glow changes slowly: refresh every third frame
                 small = pygame.transform.smoothscale(surf, self.small_size, self.scratch)
                 small.fill((88, 88, 88), special_flags=pygame.BLEND_RGB_SUB)              # bright pass
                 self._blur(small, damage)

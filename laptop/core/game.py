@@ -175,7 +175,8 @@ class Game:
             if self.strike is not None and self.strike["phase"] == "await":
                 self.strike.update(phase="warn", left=float(d[0]), mode="tower")
             elif self.strike is None:                       # the tower's own test-fire button: no date
-                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None}
+                ix, iy = self._impact_point()
+                self.strike = {"phase": "warn", "left": float(d[0]), "mode": "tower", "date": None, "x": ix, "y": iy}
             else:
                 return
             self.fx.append(("asteroid_warn", 0, 0, ""))
@@ -238,15 +239,23 @@ class Game:
             self.fx.append(("gameover", 0, 0, self.first_fail or ""))
             self.log("GAME OVER at T+%.0f s (first failure: %s)" % (self.t, self.first_fail))
 
+    def _impact_point(self):
+        """Where the rock will land: ground ahead of the rover, 14 to 32 m away, within 20 degrees of its heading (inside the chase view)."""
+        c = self.craft
+        a = math.radians(c.theta + random.uniform(-20.0, 20.0))
+        d = random.uniform(14.0, 32.0)
+        return c.x + math.cos(a) * d, c.y + math.sin(a) * d
+
     def _request_strike(self):
         date = None
         imp = self.nasa.impacts
         if imp.ok:
             date = imp.events[self.strike_i % len(imp.events)]["date"]
+        ix, iy = self._impact_point()
         if self.tower.connected and self.tower.fire():
-            self.strike = {"phase": "await", "left": 1.5, "mode": "tower", "date": date}
+            self.strike = {"phase": "await", "left": 1.5, "mode": "tower", "date": date, "x": ix, "y": iy}
         else:                                                   # no tower: the same warning from our own timer
-            self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date}
+            self.strike = {"phase": "warn", "left": C.STRIKE_WARN_S, "mode": "own", "date": date, "x": ix, "y": iy}
             self.fx.append(("asteroid_warn", 0, 0, ""))
             self.hud.text("ASTEROID", "INCOMING!")
         return True

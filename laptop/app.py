@@ -70,6 +70,7 @@ class App:
         from gfx import fonts, widgets
         fonts.reset()
         widgets._panels.clear()
+        widgets._overlays.clear()
         self._init_display()
         self.threads = []
         self.sims = []
@@ -472,6 +473,8 @@ class App:
                 return "char:" + e.unicode
         if k == pygame.K_ESCAPE:
             return "back"
+        if k == pygame.K_SPACE and pygame.key.get_mods() & pygame.KMOD_CTRL and st in S.FLYING:
+            return "ap"                                          # Ctrl+Space: autopilot on / off
         if k == pygame.K_SPACE:
             return "ap" if st in S.FLYING else "confirm"
         if st == S.MENU or st == S.SETTINGS or st == S.PAUSE:
@@ -751,9 +754,8 @@ class App:
             if st == S.PAUSE:
                 self.pause.draw(cv, self)
             if self.hud.hit_flash > 0 and st in S.FLYING:
-                s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
-                s.fill((255, 30, 30, int(150 * self.hud.hit_flash / 0.35)))
-                cv.blit(s, (0, 0))
+                from gfx.widgets import overlay
+                overlay(cv, (255, 30, 30), 150 * self.hud.hit_flash / 0.35)
         if self.scaled:
             self.screen.blit(cv, (0, 0))
         else:
@@ -803,12 +805,12 @@ class App:
         self._fps_n += 1
         if now() - self._fps_t >= 1.0:
             self.fps, self._fps_n, self._fps_t = self._fps_n / (now() - self._fps_t), 0, now()
-            if self.postfx and self.sm.state in S.FLYING and self.fps < 45 and self.postfx.level > 0:
+            if self.postfx and self.sm.state in S.FLYING and self.fps < C.TARGET_FPS and self.postfx.level > 0:
                 self._slow_s += 1
                 if self._slow_s >= 3:                                  # graceful quality drop
                     self.postfx.level -= 1
                     self._slow_s = 0
-                    self.toast("Quality lowered to keep 60 fps (post-fx %d)" % self.postfx.level, "warn")
+                    self.toast("Quality lowered to keep %d fps (post-fx %d)" % (C.TARGET_FPS, self.postfx.level), "warn")
                     self.log("quality lowered: fps %.1f" % self.fps)
             else:
                 self._slow_s = 0

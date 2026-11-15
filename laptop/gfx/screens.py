@@ -8,22 +8,37 @@ from core import calibration as cal
 from core.clock import mmss, now
 from gfx import fonts, palette as K
 from gfx.connections import ConnectionsPanel
-from gfx.widgets import dot, panel
-from gfx.rover import glow_sprite
+from gfx.widgets import bar, caption, dot, keycap, overlay, panel, pill, select_row
 
 
 def dim(surf, alpha=170):
-    s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
-    s.fill((3, 5, 14, alpha))
-    surf.blit(s, (0, 0))
+    overlay(surf, (3, 5, 14), alpha)
 
 
 def title(surf, text, y=70, size=64, color=K.CYAN):
-    fonts.text(surf, text, (C.RENDER_W // 2, y), size, color, bold=True, anchor="center", shadow=True)
+    """Screen title in the display face, letter-spaced, with a thin accent rule underneath."""
+    r = fonts.text(surf, text, (C.RENDER_W // 2, y), size, color, bold=True, anchor="center", shadow=True, display=True, track=max(2, size // 12))
+    w = min(r.w, 360)
+    pygame.draw.rect(surf, K.mix(color, K.BG, 0.35), (r.centerx - w // 2, r.bottom + 2, w, 2))
+    pygame.draw.rect(surf, color, (r.centerx - 28, r.bottom + 1, 56, 4), border_radius=2)
+    return r
 
 
-def hints(surf, text):
-    fonts.text(surf, text, (C.RENDER_W // 2, C.RENDER_H - 48), 20, K.GREY, anchor="center")
+def hints(surf, text, y=None):
+    """Bottom help line: key names bright, descriptions grey. Format: 'key: what    key: what'."""
+    parts = [p.strip() for p in text.split("    ") if p.strip()]
+    size = 18
+    widths = [fonts.width(p, size) for p in parts]
+    x = C.RENDER_W // 2 - (sum(widths) + 36 * (len(parts) - 1)) // 2
+    y = C.RENDER_H - 48 if y is None else y
+    for p, w in zip(parts, widths):
+        if ": " in p:
+            k, v = p.split(": ", 1)
+            a = fonts.text(surf, k, (x, y), size, K.CYAN, bold=True, anchor="midleft")
+            fonts.text(surf, v, (a.right + 8, y), size, K.GREY, anchor="midleft")
+        else:
+            fonts.text(surf, p, (x, y), size, K.GREY, anchor="midleft")
+        x += w + 36
 
 
 class MenuList:
@@ -38,14 +53,11 @@ class MenuList:
             sel = k == self.i
             r = pygame.Rect(x, y + k * step, width, step - 10)
             if sel:
-                s = pygame.Surface(r.size, pygame.SRCALPHA)
-                pygame.draw.rect(s, (60, 130, 220, 70), s.get_rect(), border_radius=12)
-                pygame.draw.rect(s, (*K.CYAN, 230), s.get_rect(), 2, border_radius=12)
-                surf.blit(s, r.topleft)
-                pygame.draw.polygon(surf, K.CYAN, [(r.left + 16, r.centery - 10), (r.left + 16, r.centery + 10), (r.left + 30, r.centery)])
-            fonts.text(surf, label, (r.left + 48, r.centery), size, K.WHITE if sel else K.GREY, bold=sel, anchor="midleft")
+                select_row(surf, r)
+                pygame.draw.polygon(surf, K.CYAN, [(r.left + 20, r.centery - 9), (r.left + 20, r.centery + 9), (r.left + 33, r.centery)])
+            fonts.text(surf, label, (r.left + 50, r.centery), size, K.WHITE if sel else K.GREY, bold=sel, anchor="midleft", track=1)
             if sel and hint:
-                fonts.text(surf, hint, (r.right + 28, r.centery), 20, K.GREY, anchor="midleft")
+                fonts.text(surf, hint, (r.right - 20, r.centery), 18, K.mix(K.CYAN, K.WHITE, 0.5), anchor="midright")
 
 
 class BootScreen:
@@ -69,14 +81,14 @@ class BootScreen:
 
     def draw(self, surf, app):
         cx, cy = C.RENDER_W // 2, C.RENDER_H // 2
-        n = len("T-Minus_6")
+        n = len("T-MINUS_6")
         shown = min(n, int(self.t * 9))
-        fonts.text(surf, "T-Minus_6"[:shown], (cx, cy - 40), 120, K.WHITE, bold=True, anchor="center", shadow=True)
-        fonts.text(surf, "D NOVAS   |   NASA SPACE APPS 2026   |   TORONTO", (cx, cy + 70), 24, K.GREY, anchor="center")
-        bar = pygame.Rect(cx - 300, cy + 140, 600, 10)
-        pygame.draw.rect(surf, (25, 38, 70), bar, border_radius=5)
-        pygame.draw.rect(surf, K.CYAN, (bar.left, bar.top, int(bar.w * self.done / max(1, self.total)), bar.h), border_radius=5)
-        fonts.text(surf, getattr(self, "label", "starting") + "...", (cx, cy + 170), 20, K.GREY, anchor="center")
+        fonts.text(surf, "T-MINUS_6"[:shown], (cx, cy - 50), 130, K.WHITE, bold=True, anchor="center", shadow=True, display=True, track=10)
+        pygame.draw.rect(surf, K.CYAN, (cx - 40, cy + 34, 80, 4), border_radius=2)
+        fonts.text(surf, "D NOVAS   |   NASA SPACE APPS 2026   |   TORONTO", (cx, cy + 74), 20, K.GREY, bold=True, anchor="center", track=3)
+        b = pygame.Rect(cx - 300, cy + 140, 600, 12)
+        bar(surf, b, self.done / max(1, self.total), K.CYAN, ticks=self.total)
+        fonts.text(surf, "LOADING  " + getattr(self, "label", "starting").upper(), (cx, cy + 176), 15, K.GREY, bold=True, anchor="center", track=2)
 
 
 class MenuScreen:
@@ -110,11 +122,11 @@ class MenuScreen:
 
     def draw(self, surf, app):
         self.conn.draw(surf, app.connections, app.t)
-        title(surf, "T-Minus_6", 335, 80, K.WHITE)
-        fonts.text(surf, "DRIVE. COLLECT. SURVIVE THE LUNAR NIGHT.", (C.RENDER_W // 2, 400), 24, K.CYAN, anchor="center")
-        panel(surf, pygame.Rect(C.RENDER_W // 2 - 490, 440, 980, 360), 190, scan=False)
-        self.list.draw(surf, C.RENDER_W // 2 - 440, 455, 62, 36)
-        fonts.text(surf, "BEST  %s" % mmss(C.BEST_TIME), (C.RENDER_W - 40, C.RENDER_H - 110), 22, K.GREY, anchor="topright")
+        title(surf, "T-MINUS_6", 352, 104, K.WHITE)
+        fonts.text(surf, "DRIVE.  COLLECT.  SURVIVE THE LUNAR NIGHT.", (C.RENDER_W // 2, 440), 20, K.CYAN, bold=True, anchor="center", track=4)
+        r = panel(surf, pygame.Rect(C.RENDER_W // 2 - 400, 490, 800, 344), 200, scan=False)
+        self.list.draw(surf, r.left + 20, r.top + 20, 62, 34, r.w - 40)
+        pill(surf, pygame.Rect(C.RENDER_W - 250, C.RENDER_H - 126, 210, 36), "BEST  %s" % mmss(C.BEST_TIME), K.YELLOW, 18)
         hints(surf, "up / down: choose    A or Enter: select    Tab: connections    F2 / Back: hardware check    F11: fullscreen    M: mute")
 
 
@@ -162,19 +174,17 @@ class SettingsScreen:
 
     def draw(self, surf, app):
         title(surf, "SETTINGS", 110)
-        x, y = C.RENDER_W // 2 - 460, 220
+        x, y = C.RENDER_W // 2 - 460, 230
+        panel(surf, pygame.Rect(x - 24, y - 24, 968, len(self.ITEMS) * 62 + 40), 200, scan=False)
         for k, item in enumerate(self.ITEMS):
             sel = k == self.list.i
             r = pygame.Rect(x, y + k * 62, 920, 54)
             if sel:
-                s = pygame.Surface(r.size, pygame.SRCALPHA)
-                pygame.draw.rect(s, (60, 130, 220, 70), s.get_rect(), border_radius=10)
-                pygame.draw.rect(s, (*K.CYAN, 230), s.get_rect(), 2, border_radius=10)
-                surf.blit(s, r.topleft)
-            fonts.text(surf, item, (r.left + 24, r.centery), 28, K.WHITE if sel else K.GREY, anchor="midleft")
+                select_row(surf, r, 10)
+            fonts.text(surf, item, (r.left + 26, r.centery), 26, K.WHITE if sel else K.GREY, bold=sel, anchor="midleft")
             v = self.value(k)
             if v:
-                fonts.text(surf, ("<  %s  >" if sel else "%s") % v, (r.right - 24, r.centery), 28, K.CYAN if sel else K.GREY, anchor="midright")
+                fonts.text(surf, ("<   %s   >" if sel else "%s") % v, (r.right - 24, r.centery), 26, K.CYAN if sel else K.GREY, bold=sel, anchor="midright")
         hints(surf, "up / down: choose    left / right: change    Esc or B: back    changes are saved to config.local.json")
 
 
@@ -194,10 +204,11 @@ class PauseOverlay:
 
     def draw(self, surf, app):
         dim(surf, 190)
-        title(surf, "PAUSED", 330, 90, K.WHITE)
-        fonts.text(surf, "rover stopped", (C.RENDER_W // 2, 395), 22, K.GREY, anchor="center")
-        self.list.draw(surf, C.RENDER_W // 2 - 260, 450, 64, 34, 520)
-        hints(surf, "Start: resume    hold Start 2 s: restart the run")
+        title(surf, "PAUSED", 320, 90, K.WHITE)
+        fonts.text(surf, "ROVER STOPPED", (C.RENDER_W // 2, 400), 17, K.GREY, bold=True, anchor="center", track=3)
+        panel(surf, pygame.Rect(C.RENDER_W // 2 - 290, 436, 580, 228), 215, scan=False)
+        self.list.draw(surf, C.RENDER_W // 2 - 270, 456, 64, 32, 540)
+        hints(surf, "Start: resume    hold Start 2 s: restart the run", 700)
 
 
 class CalibrateScreen:
@@ -308,7 +319,7 @@ class CalibrateScreen:
         if steps[2]:
             fonts.text(surf, steps[2], (C.RENDER_W // 2, y + 190), 24, K.CYAN, anchor="midtop")
             box = pygame.Rect(C.RENDER_W // 2 - 160, y + 240, 320, 64)
-            pygame.draw.rect(surf, (20, 32, 60), box, border_radius=10)
+            pygame.draw.rect(surf, K.TRACK, box, border_radius=10)
             pygame.draw.rect(surf, K.CYAN, box, 2, border_radius=10)
             fonts.text(surf, self.text + ("_" if int(now() * 2) % 2 else ""), box.center, 36, K.WHITE, mono=True, anchor="center")
         if step == "done":
@@ -484,12 +495,12 @@ class HwCheckScreen:
             fonts.text(surf, info[:58], (r.right - 20, r.centery), 20, K.GREY if conn else K.RED, mono=True, anchor="midright")
             y += 76
         r = panel(surf, pygame.Rect(1280, 150, 520, 366), 170, scan=False)
-        fonts.text(surf, "TESTS (press the number)", (r.left + 20, r.top + 14), 18, K.GREY)
+        caption(surf, "TESTS  -  PRESS THE NUMBER", (r.left + 20, r.top + 16))
         for i, (k, label) in enumerate(self.TESTS.items()):
-            fonts.text(surf, k, (r.left + 24, r.top + 52 + i * 42), 24, K.CYAN, mono=True, bold=True)
-            fonts.text(surf, label, (r.left + 62, r.top + 52 + i * 42), 24, K.WHITE)
+            keycap(surf, (r.left + 22, r.top + 50 + i * 43), k, True, 30)
+            fonts.text(surf, label, (r.left + 68, r.top + 53 + i * 43), 22, K.WHITE)
         y = 548
-        fonts.text(surf, "CHECKLIST", (120, y - 6), 18, K.GREY)
+        caption(surf, "CHECKLIST", (120, y - 6))
         for i, (key, label, kind) in enumerate(self.CHECKS):
             col_i, row_i = i // 6, i % 6
             x, yy = 120 + col_i * 840, y + 24 + row_i * 44
@@ -507,11 +518,8 @@ class HwCheckScreen:
             fonts.text(surf, "running: %s ..." % self.job[0], (C.RENDER_W // 2, 520), 24, K.YELLOW, anchor="center")
         ready = self.ready(app)
         badge = pygame.Rect(C.RENDER_W // 2 - 260, C.RENDER_H - 190, 520, 76)
-        col = K.GREEN if ready else K.DIM
-        pygame.draw.rect(surf, K.mix(K.PANEL, col, 0.28 if ready else 0.1), badge, border_radius=38)
-        pygame.draw.rect(surf, col, badge, 3, border_radius=38)
-        fonts.text(surf, "READY FOR DEMO" if ready else "%d of %d checks passed" % (sum(1 for v in self.status.values() if v), len(self.status)),
-                   badge.center, 34 if ready else 26, col, bold=True, anchor="center")
+        pill(surf, badge, "READY FOR DEMO" if ready else "%d of %d checks passed" % (sum(1 for v in self.status.values() if v), len(self.status)),
+             K.GREEN if ready else K.GREY, 34 if ready else 26)
         hints(surf, "1-7: run a test    Y / N: confirm what you saw    Esc / B: back")
 
 
@@ -527,23 +535,34 @@ class ResultsScreen:
 
     def draw(self, surf, app):
         res = app.last_results
-        pygame.draw.rect(surf, (0, 0, 0), (0, 0, C.RENDER_W, C.RENDER_H))
         cx = C.RENDER_W // 2
-        title(surf, "OUTPOST LOST", 110, 90, K.RED)
-        fonts.text(surf, "Time survived  %s" % mmss(res["time"]), (cx, 200), 34, K.WHITE, anchor="center")
+        if app.world_view is not None:                                 # the night sky behind the debrief
+            app.world_view.stars.draw(surf)
+            dim(surf, 120)
+        else:
+            surf.fill(K.BG)
+        title(surf, "OUTPOST LOST", 104, 96, K.RED)
         s = res["samples"]
-        rows = (("Samples collected", "ice %d    regolith %d    mineral %d    (score %d)" % (s["ice"], s["regolith"], s["mineral"], res["score"])),
-                ("Asteroid hits", str(res["strikes"])),
-                ("Failed first", res["first_fail_label"].upper()))
-        for i, (k, v) in enumerate(rows):
-            fonts.text(surf, k, (cx - 40, 280 + i * 56), 28, K.GREY, anchor="topright")
-            fonts.text(surf, v, (cx + 10, 280 + i * 56), 28, K.RED if i == 2 else K.WHITE, bold=(i == 2), anchor="topleft")
-        CalibrateScreen.wrap(surf, res["why"], cx, 470, 1300, 28, K.YELLOW)
-        fonts.text(surf, "NASA data used this run", (cx, 590), 20, K.GREY, anchor="center")
-        for i, line in enumerate(res["nasa"] or ["none (no data files found in data/nasa)"]):
-            fonts.text(surf, line, (cx, 625 + i * 32), 22, K.CYAN, anchor="center")
-        if int(now() * 2) % 2:
-            fonts.text(surf, "Press Start or Enter to try again", (cx, C.RENDER_H - 160), 44, K.YELLOW, bold=True, anchor="center")
+        tiles = (("TIME SURVIVED", mmss(res["time"]), K.WHITE), ("SAMPLES", str(s["ice"] + s["regolith"] + s["mineral"]), K.CYAN),
+                 ("SCORE", str(res["score"]), K.YELLOW), ("ASTEROID HITS", str(res["strikes"]), K.ORANGE),
+                 ("FAILED FIRST", res["first_fail_label"].upper(), K.RED))
+        tw, gap = 300, 20
+        x0 = cx - (len(tiles) * tw + (len(tiles) - 1) * gap) // 2
+        for i, (k, v, col) in enumerate(tiles):                        # one stat tile each
+            r = panel(surf, pygame.Rect(x0 + i * (tw + gap), 210, tw, 150), 205, edge=col if i == 4 else K.PANEL_EDGE, scan=False)
+            fonts.text(surf, k, (r.centerx, r.top + 30), 15, K.GREY, bold=True, anchor="center", track=2)
+            fonts.text(surf, v, (r.centerx, r.top + 90), 50 if len(v) < 8 else 38, col, bold=True, anchor="center", display=True, track=2)
+        fonts.text(surf, "ice %d      regolith %d      mineral %d" % (s["ice"], s["regolith"], s["mineral"]), (cx, 392), 20, K.GREY, anchor="center")
+        r = panel(surf, pygame.Rect(cx - 760, 440, 1520, 150), 205, edge=K.YELLOW, scan=False)
+        caption(surf, "WHY IT MATTERS", (r.left + 24, r.top + 18), K.YELLOW)
+        CalibrateScreen.wrap(surf, res["why"], cx, r.top + 54, 1400, 26, K.mix(K.YELLOW, K.WHITE, 0.4))
+        lines = res["nasa"] or ["none (no data files found in data/nasa)"]
+        r = panel(surf, pygame.Rect(cx - 760, 612, 1520, 64 + 32 * len(lines)), 205, scan=False)
+        caption(surf, "NASA DATA USED THIS RUN", (r.left + 24, r.top + 18))
+        for i, line in enumerate(lines):
+            fonts.text(surf, line, (cx, r.top + 62 + i * 32), 21, K.mix(K.CYAN, K.WHITE, 0.25), anchor="center")
+        a = 150 + int(105 * (0.5 + 0.5 * math.sin(now() * 4)))        # soft pulse instead of a hard blink
+        fonts.text(surf, "PRESS START OR ENTER TO TRY AGAIN", (cx, C.RENDER_H - 120), 34, K.YELLOW, bold=True, anchor="center", alpha=a, display=True, track=4)
 
 
 class GameOverFX:
@@ -560,8 +579,7 @@ class GameOverFX:
 
     def draw(self, surf, game):
         if int(self.t * 5) % 2 == 0 and self.t < 2.0:
-            fonts.text(surf, "%s FAILED" % (self.fail.upper() or "LIFE SUPPORT"), (C.RENDER_W // 2, 200), 64, K.RED, bold=True, anchor="center", shadow=True)
+            fonts.text(surf, "%s FAILED" % (self.fail.upper() or "LIFE SUPPORT"), (C.RENDER_W // 2, 200), 72, K.RED, bold=True, anchor="center", shadow=True,
+                       display=True, track=6)
             pygame.draw.rect(surf, K.RED, (6, 6, C.RENDER_W - 12, C.RENDER_H - 12), 5)
-        s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
-        s.fill((0, 0, 0, int(min(1.0, self.t / self.LENGTH) * 255)))
-        surf.blit(s, (0, 0))
+        overlay(surf, (0, 0, 0), min(1.0, self.t / self.LENGTH) * 255)

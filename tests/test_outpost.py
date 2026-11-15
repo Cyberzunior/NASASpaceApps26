@@ -327,7 +327,7 @@ def test_intro_holds_the_rover_and_the_meters_until_it_ends_and_skips():
     for _ in range(40):
         g.step(0.1)
     assert g.intro_on and g.m == m and g.t == 0.0
-    g.step(1.5)
+    g.step(2.5)                                                  # the intro is 6 s long (INTRO_S)
     assert not g.intro_on and not st.hold_commands
     g.reset(intro=True)
     g.skip_intro()

@@ -16,6 +16,8 @@ HEAT = (255, 90, 40)
 GREEN = (80, 230, 140)
 HULL = (225, 232, 245)
 HULL_DARK = (110, 130, 165)
+VIOLET = (190, 140, 255)
+TRACK = (16, 26, 52)          # empty bar / field background
 DOT = {"green": GREEN, "yellow": YELLOW, "red": RED}
 
 

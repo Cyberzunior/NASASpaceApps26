@@ -6,10 +6,10 @@ from core import thermal as th
 from core.clock import mmss
 from core.game import KINDS, LABELS, METERS
 from gfx import fonts, palette as K
-from gfx.widgets import Hearts, Toasts, Tween, banner, dot, panel
+from gfx.widgets import Hearts, Toasts, Tween, banner, bar, caption, dot, keycap, panel, pill
 from gfx.world import SAMPLE_COLORS
 
-METER_COLORS = {"power": K.YELLOW, "oxygen": K.CYAN, "food": K.GREEN, "shield": (190, 140, 255)}
+METER_COLORS = {"power": K.YELLOW, "oxygen": K.CYAN, "food": K.GREEN, "shield": K.VIOLET}
 LABELS_CONN = (("hud", "HUD"), ("tower", "TOWER"), ("robot", "ROVER"), ("camera", "CAM"))
 STATUS_COLOR = {"connected": K.GREEN, "not connected": K.DIM, "lost": K.RED}
 
@@ -22,8 +22,11 @@ class Hud:
         self.hit_flash = 0.0
         self.cam_surface = None
         self.cam_stamp = -1.0
+        self.cam_t = -1.0
+        self.cam_scaled = {}
         self.bars = {k: Tween(100.0, 8.0) for k in METERS}
         self.edge = 0.0
+        self.edge_img = None
 
     def update(self, dt, game):
         self.t += dt
@@ -47,38 +50,35 @@ class Hud:
     # ---- connection dots
     def conn_strip(self, surf, conn, x=None, y=16):
         """Compact strip of the four connection dots: green connected, grey not connected, red lost."""
-        w = 400
+        w = 430
         x = C.RENDER_W - 24 - w if x is None else x
         r = panel(surf, pygame.Rect(x, y, w, 40), 175, scan=False, radius=20)
-        cx = r.left + 24
+        cx = r.left + 26
         for key, label in LABELS_CONN:
             st = conn.get(key, ("not connected",))[0] if conn else "not connected"
-            dot(surf, (cx, r.centery), STATUS_COLOR[st], 7)
-            fonts.text(surf, label, (cx + 13, r.centery), 16, K.WHITE if st == "connected" else K.GREY, anchor="midleft")
-            cx += fonts.width(label, 16) + 40
+            dot(surf, (cx, r.centery), STATUS_COLOR[st], 6)
+            fonts.text(surf, label, (cx + 14, r.centery), 15, K.WHITE if st == "connected" else K.GREY, bold=True, anchor="midleft", track=1)
+            cx += fonts.width(label, 15, bold=True) + len(label) + 44
         return r
 
     # ---- pieces
     def meters_panel(self, surf, game):
         r = panel(surf, pygame.Rect(24, 16, 470, 250))
         self.hearts.draw(surf, (r.left + 16, r.top + 12), game.hearts, self.t)
-        fonts.text(surf, "BASE %d / %d" % (game.hearts, C.LIVES), (r.left + 18, r.top + 46), 16, K.GREY)
-        fonts.text(surf, "T+ %s" % mmss(game.t), (r.right - 18, r.top + 44), 20, K.CYAN, mono=True, anchor="topright")
-        y = r.top + 78
+        fonts.text(surf, "BASE INTEGRITY  %d / %d" % (game.hearts, C.LIVES), (r.left + 18, r.top + 46), 14, K.GREY, bold=True, track=1)
+        fonts.text(surf, "T+ %s" % mmss(game.t), (r.right - 18, r.top + 42), 22, K.CYAN, mono=True, bold=True, anchor="topright")
+        pygame.draw.line(surf, (40, 62, 104), (r.left + 16, r.top + 72), (r.right - 16, r.top + 72))
+        y = r.top + 84
         for k in METERS:
             col = METER_COLORS[k]
             v = self.bars[k].v
             low = game.m[k] < 20
-            fonts.text(surf, LABELS[k], (r.left + 18, y + 2), 20, K.WHITE, bold=True)
-            bar = pygame.Rect(r.left + 120, y + 2, 270, 22)
-            pygame.draw.rect(surf, (20, 32, 60), bar, border_radius=6)
-            fill = bar.copy()
-            fill.w = int(bar.w * max(0.0, min(1.0, v / 100.0)))
-            c = K.RED if low and int(self.t * 4) % 2 else col
-            if fill.w > 0:
-                pygame.draw.rect(surf, c, fill, border_radius=6)
-            pygame.draw.rect(surf, K.mix(col, K.WHITE, 0.3), bar, 2, border_radius=6)
-            fonts.text(surf, "%d" % round(game.m[k]), (bar.right + 14, bar.centery), 20, K.WHITE, mono=True, anchor="midleft")
+            blink = low and int(self.t * 4) % 2
+            pygame.draw.rect(surf, K.RED if blink else col, (r.left + 18, y + 5, 4, 16), border_radius=2)
+            fonts.text(surf, LABELS[k].upper(), (r.left + 30, y + 3), 17, K.RED if blink else K.WHITE, bold=True, track=1)
+            b = pygame.Rect(r.left + 136, y + 3, 258, 20)
+            bar(surf, b, v / 100.0, col, flash=K.RED if blink else None)
+            fonts.text(surf, "%d" % round(game.m[k]), (r.right - 18, b.centery), 21, K.RED if low else K.WHITE, mono=True, bold=True, anchor="midright")
             y += 38
         return r
 
@@ -86,18 +86,17 @@ class Hud:
         th_ = game.thermal
         r = panel(surf, pygame.Rect(24, 280, 470, 128))
         col = (K.GREEN, K.ICE, K.HEAT)[th_.state]
-        fonts.text(surf, th_.label(), (r.left + 18, r.top + 12), 22, K.WHITE, mono=True)
-        src = "Source: NASA LRO Diviner" if game.nasa.diviner.ok else "built-in temperature curve"
-        fonts.text(surf, src, (r.left + 18, r.top + 42), 16, K.GREY)
-        badge = pygame.Rect(r.right - 150, r.top + 70, 132, 30)
-        pygame.draw.rect(surf, K.mix(K.PANEL, col, 0.35), badge, border_radius=15)
-        pygame.draw.rect(surf, col, badge, 2, border_radius=15)
-        fonts.text(surf, th.NAMES[th_.state], badge.center, 19, col, bold=True, anchor="center")
+        caption(surf, "SURFACE TEMPERATURE", (r.left + 18, r.top + 14))
+        fonts.text(surf, "%d C" % round(th_.lunar_c), (r.left + 18, r.top + 36), 40, K.WHITE, mono=True, bold=True, display=True)
+        pill(surf, pygame.Rect(r.right - 150, r.top + 16, 132, 30), th.NAMES[th_.state], col, 16)
         day = th_.daylight()
         h = th_.local_hour()
-        fonts.text(surf, ("DAY  " if day else "NIGHT  ") + "%02d:%02d" % (int(h), int((h % 1) * 60)), (r.left + 18, r.top + 78), 22,
-                   K.YELLOW if day else K.ICE, mono=True)
-        fonts.text(surf, "solar charging" if day else "no sunlight", (r.left + 18, r.top + 104), 16, K.GREEN if day else K.DIM)
+        fonts.text(surf, ("DAY  " if day else "NIGHT  ") + "%02d:%02d" % (int(h), int((h % 1) * 60)), (r.right - 18, r.top + 60), 18,
+                   K.YELLOW if day else K.ICE, mono=True, bold=True, anchor="topright")
+        pygame.draw.line(surf, (40, 62, 104), (r.left + 16, r.bottom - 34), (r.right - 16, r.bottom - 34))
+        src = "NASA LRO Diviner" if game.nasa.diviner.ok else "built-in curve"
+        fonts.text(surf, ("solar charging" if day else "no sunlight") + "   |   " + src, (r.left + 18, r.bottom - 17), 14,
+                   K.GREEN if day else K.GREY, anchor="midleft")
         return r
 
     def banners(self, surf, game, y):
@@ -113,7 +112,7 @@ class Hud:
             sub = "Shield draining. Press 3 to boost it."
             if st["nasa"]:
                 sub = "%s  %s   Source: NASA DONKI" % (st["label"], st["date"])
-            banner(surf, C.RENDER_W // 2 + 180, y, "RADIATION STORM  %.0f s" % max(0.0, st["left"]), sub, (190, 140, 255), self.t)
+            banner(surf, C.RENDER_W // 2 + 180, y, "RADIATION STORM  %.0f s" % max(0.0, st["left"]), sub, K.VIOLET, self.t)
             y += 108
         if game.thermal.state != th.NORMAL:
             hot = game.thermal.state == th.HOT
@@ -136,8 +135,13 @@ class Hud:
         """Small top-view rover with an arrow to the current sample, relative to the heading, and the distance in metres."""
         r = panel(surf, pygame.Rect(24, C.RENDER_H - 24 - 220, 300, 220))
         cx, cy = r.left + 110, r.centery + 6
-        fonts.text(surf, "SAMPLE", (r.left + 18, r.top + 10), 16, K.GREY)
-        pygame.draw.circle(surf, (24, 40, 74), (cx, cy), 86, 2)
+        caption(surf, "NEXT SAMPLE", (r.left + 18, r.top + 12))
+        pygame.draw.circle(surf, K.TRACK, (cx, cy), 86)
+        pygame.draw.circle(surf, (44, 70, 118), (cx, cy), 86, 2)
+        pygame.draw.circle(surf, (30, 48, 86), (cx, cy), 48, 1)
+        for i in range(12):                                             # bezel ticks
+            a = math.radians(i * 30)
+            pygame.draw.line(surf, (70, 104, 160), (cx + 78 * math.sin(a), cy - 78 * math.cos(a)), (cx + 85 * math.sin(a), cy - 85 * math.cos(a)), 2)
         for a in (-40, 40):                                              # the cone samples spawn in
             pygame.draw.line(surf, (40, 70, 110), (cx, cy), (cx + 86 * math.sin(math.radians(a)), cy - 86 * math.cos(math.radians(a))), 1)
         pygame.draw.rect(surf, K.HULL, (cx - 11, cy - 18, 22, 36), border_radius=5)            # rover icon, nose up
@@ -153,7 +157,7 @@ class Hud:
             pygame.draw.line(surf, col, (cx + 20 * math.sin(a), cy - 20 * math.cos(a)), (ex, ey), 5)
             hx, hy = math.sin(a), -math.cos(a)
             pygame.draw.polygon(surf, col, [(ex + hx * 14, ey + hy * 14), (ex - hy * 9 - hx * 4, ey + hx * 9 - hy * 4), (ex + hy * 9 - hx * 4, ey - hx * 9 - hy * 4)])
-            fonts.text(surf, "%.0f m" % d, (r.right - 18, r.top + 70), 40, col, mono=True, bold=True, anchor="topright")
+            fonts.text(surf, "%.0f m" % d, (r.right - 14, r.top + 70), 34, col, mono=True, bold=True, anchor="topright")
             fonts.text(surf, game.sample["kind"].upper(), (r.right - 18, r.top + 120), 20, SAMPLE_COLORS[game.sample["kind"]], bold=True, anchor="topright")
             fonts.text(surf, ("left " if b < -3 else "right " if b > 3 else "ahead ") + ("%d deg" % abs(b) if abs(b) > 3 else ""),
                        (r.right - 18, r.top + 148), 18, K.GREY, anchor="topright")
@@ -168,16 +172,18 @@ class Hud:
                  ("3", "Shield boost", "-%d PWR  +%d SHLD" % (C.SHIELD_BOOST_POWER, C.SHIELD_BOOST_GAIN)),
                  ("4", "Rest crew", "stop %d s  +%d O2 +%d FOOD" % (C.REST_S, C.REST_OXYGEN, C.REST_FOOD)))
         for i, (key, name, desc) in enumerate(items):
-            x = r.left + 18 + i * 210
-            col = K.DIM if locked else K.WHITE
-            pygame.draw.rect(surf, (24, 40, 74), (x, r.top + 14, 30, 30), border_radius=6)
-            fonts.text(surf, key, (x + 15, r.top + 29), 22, K.CYAN if not locked else K.DIM, bold=True, anchor="center")
-            fonts.text(surf, name, (x + 40, r.top + 16), 20, col, bold=True)
-            fonts.text(surf, desc, (x, r.top + 54), 15, K.GREY if not locked else K.DIM)
+            x = r.left + 20 + i * 210
+            if i:
+                pygame.draw.line(surf, (40, 62, 104), (x - 12, r.top + 14), (x - 12, r.top + 74))
+            keycap(surf, (x, r.top + 14), key, not locked)
+            fonts.text(surf, name, (x + 40, r.top + 16), 20, K.DIM if locked else K.WHITE, bold=True)
+            fonts.text(surf, desc, (x, r.top + 54), 15, K.DIM if locked else K.mix(K.GREY, K.WHITE, 0.3))
+        pygame.draw.line(surf, (40, 62, 104), (r.left + 16, r.bottom - 40), (r.right - 16, r.bottom - 40))
         c = K.GREEN if ap_on else K.GREY
-        dot(surf, (r.left + 28, r.bottom - 22), c, 6)
-        fonts.text(surf, "AUTO-PILOT %s (Y or P)   WASD drive   Q / E pan camera   R recentre   C robot cam" % ("ON" if ap_on else "OFF"),
-                   (r.left + 44, r.bottom - 22), 15, c if ap_on else K.GREY, anchor="midleft")
+        dot(surf, (r.left + 28, r.bottom - 21), c, 6)
+        fonts.text(surf, "AUTO-PILOT %s" % ("ON" if ap_on else "OFF"), (r.left + 44, r.bottom - 21), 15, c, bold=True, anchor="midleft", track=1)
+        fonts.text(surf, "Ctrl+Space / Y / P auto-pilot    WASD drive    Q / E pan camera    R recentre    C rover cam",
+                   (r.right - 20, r.bottom - 21), 15, K.GREY, anchor="midright")
 
     def camera(self, surf, cam, full, rect=None):
         if full:
@@ -189,10 +195,17 @@ class Hud:
         frame = cam.frame if cam else None
         live = bool(cam and cam.live())
         if live and frame is not None:
-            if cam.stamp != self.cam_stamp:
-                self.cam_stamp = cam.stamp
+            if cam.stamp != self.cam_stamp and self.t - self.cam_t >= 1 / 15:       # camera picture at most 15 times a second
+                self.cam_stamp, self.cam_t = cam.stamp, self.t
                 self.cam_surface = pygame.image.frombuffer(frame.tobytes(), (frame.shape[1], frame.shape[0]), "RGB")
-            surf.blit(pygame.transform.scale(self.cam_surface, rect.size) if full else pygame.transform.smoothscale(self.cam_surface, rect.size), rect)
+                self.cam_scaled = {}                                                    # scaled copies belong to the new picture
+            key = tuple(rect.size)
+            img = self.cam_scaled.get(key) if self.cam_surface is not None else None
+            if img is None and self.cam_surface is not None:
+                img = self.cam_scaled[key] = (pygame.transform.scale(self.cam_surface, key) if full
+                                              else pygame.transform.smoothscale(self.cam_surface, key))
+            if img is not None:
+                surf.blit(img, rect)
         else:
             pygame.draw.rect(surf, (8, 10, 18), rect)
             fonts.text(surf, "NO SIGNAL", rect.center, 40 if full else 26, K.GREY, bold=True, anchor="center")
@@ -200,12 +213,10 @@ class Hud:
                 fonts.text(surf, cam.error[:60], (rect.centerx, rect.centery + (36 if full else 24)), 18 if full else 14, K.DIM, anchor="center")
         badge = pygame.Rect(rect.left + 14, rect.top + 12, 150, 30) if full else pygame.Rect(rect.left + 6, rect.bottom + 8, 190, 30)
         col = K.GREEN if live else K.RED
-        pygame.draw.rect(surf, K.mix(K.PANEL, col, 0.3), badge, border_radius=15)
-        pygame.draw.rect(surf, col, badge, 2, border_radius=15)
         age = cam.age_ms() if cam else None
-        fonts.text(surf, ("LIVE %d ms" % age) if live and age is not None else "NO SIGNAL", badge.center, 17, col, bold=True, anchor="center")
+        pill(surf, badge, ("LIVE %d ms" % age) if live and age is not None else "NO SIGNAL", col)
         if not full:
-            fonts.text(surf, "ROVER CAM  [C]", (rect.right - 6, rect.bottom + 14), 15, K.GREY, anchor="topright")
+            fonts.text(surf, "ROVER CAM  [C]", (rect.right - 6, rect.bottom + 15), 14, K.GREY, bold=True, anchor="topright", track=1)
 
     def debug(self, surf, info):
         lines = ["FPS %5.1f   frame %5.1f ms   worst %5.1f ms   postfx %d" % (info["fps"], info["ms"], info["worst"], info["postfx"])]
@@ -218,12 +229,13 @@ class Hud:
 
     def edge_flash(self, surf):
         if self.edge > 0.01:                                    # asteroid warning: the screen edge flashes red
+            if self.edge_img is None:                           # built once, faded with set_alpha
+                self.edge_img = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
+                for i in range(14):
+                    pygame.draw.rect(self.edge_img, (255, 40, 40, int(230 * (1 - i / 14) ** 2)), (i * 5, i * 5, C.RENDER_W - i * 10, C.RENDER_H - i * 10), 5)
             p = 0.5 + 0.5 * math.sin(self.t * 14)
-            a = int(255 * self.edge * (0.35 + 0.65 * p))
-            s = pygame.Surface((C.RENDER_W, C.RENDER_H), pygame.SRCALPHA)
-            for i, al in enumerate((a, a // 2, a // 4)):
-                pygame.draw.rect(s, (255, 40, 40, al), (i * 14, i * 14, C.RENDER_W - i * 28, C.RENDER_H - i * 28), 14)
-            surf.blit(s, (0, 0))
+            self.edge_img.set_alpha(int(255 * self.edge * (0.35 + 0.65 * p)))
+            surf.blit(self.edge_img, (0, 0))
 
     def draw(self, surf, game, ui):
         """ui: dict(conn, ap_on, camera, cam_full, debug)"""

@@ -104,6 +104,7 @@ SAMPLE_SCORE = 100
 
 # ---- Asteroid strikes (the tower warns, then fires)
 STRIKE_WARN_S = 3.0
+STRIKE_RADIUS_M = 7.0       # impact zone radius at the start of the warning (shrinks toward the impact)
 STRIKE_MIN_GAP_S = 25.0
 STRIKE_MAX_GAP_S = 60.0
 STRIKE_S_PER_DAY = 2.0        # real days between two observed impact flashes -> game seconds (clamped)
@@ -138,7 +139,7 @@ SENSOR_TIMEOUT_S = 10.0       # no valid DHT11 reading for this long: simulated 
 
 # ---- Intro and misc
 SKIP_INTRO = False
-INTRO_S = 5.0
+INTRO_S = 6.0
 RESTART_TO_PLAY = True
 BEST_TIME = 0.0
 MASTER_VOLUME = 0.7
@@ -149,6 +150,7 @@ FULLSCREEN = False
 WINDOW_W = 1600
 WINDOW_H = 900
 VSYNC = True
+TARGET_FPS = 45            # the game keeps at least this many frames per second by lowering post-processing when needed
 DEMO_MODE = False
 PX_PER_M = 34.0
 VIEW_3D = True            # chase camera behind the rover; False = the top-down map
