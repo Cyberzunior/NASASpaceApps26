@@ -358,8 +358,9 @@ class HudLink(Link):
             if self._sent.get(key) != lines:
                 if all(self.send(line) for line in lines):
                     self._sent[key] = lines
-        while self.r.events:
-            if not self.send(self.r.events[0]):
+        self.r.events = [(due, line) for due, line in self.r.events if t - due < 2.0]     # stale beeps are dropped
+        while self.r.events and self.r.events[0][0] <= t:
+            if not self.send(self.r.events[0][1]):
                 break
             self.r.events.pop(0)
 
@@ -375,7 +376,7 @@ class HudLink(Link):
 
     def set_lives(self, n):
         if n < self.r.lives:
-            self.r.hit()                            # a base hit: a short warning beep
+            self.r.hit(now())                       # a base hit: two quick beeps
         self.r.lives = n
 
     def set_samples(self, n):

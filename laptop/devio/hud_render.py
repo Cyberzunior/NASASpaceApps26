@@ -2,6 +2,7 @@
 (firmware/hud_panel/hud_panel.ino) only draws them. frame() returns the whole desired screen, keyed by output channel,
 and HudLink sends only the channels whose line changed, so a steady game sends nothing and a fresh link gets all of it."""
 import config as C
+from core.clock import now
 
 ZONE_LCD = {1: ("COLD SNAP", "HEATING ON"), 2: ("HOT SPELL", "COOLING ON"),
             3: ("RADIATION STORM", "BOOST SHIELD"), 4: ("ASTEROID", "DRIVE CLEAR!")}
@@ -9,7 +10,10 @@ ZONE_ARGB = {0: (0, 40, 0, 0), 1: (0, 0, 60, 0), 2: (60, 0, 0, 0), 3: (40, 0, 50
 ZONE_BUZZ = {1: (400, 80, 300), 2: (2000, 80, 300), 3: (800, 80, 250), 4: (1600, 80, 200)}
 LOW_METER = 25                  # any meter under this: a slow low warning beep
 LOW_BUZZ = (500, 100, 1500)
-HIT_BEEP = "BZ,900,150,0"
+HIT_BEEP = "BZ,1800,90,0"           # two quick beeps on a hit
+HIT_GAP_S = 0.22
+PICKUP_BEEP = "BZ,900,400,0"       # one slow beep on a sample pickup
+CHIRP = "BZ,1200,120,0"            # run start
 GREEN, RED, YELLOW = 1, 2, 4
 PICKUP_S = 1.0                  # yellow LED: 5 blinks in one second
 PICKUP_MS = 100
@@ -30,7 +34,7 @@ class HudRenderer:
         self.over = False
         self.override: tuple | None = None  # (line1, line2) the game set with text(), until clear_text()
         self.pickup_t = None
-        self.events = []                   # one-shot BZ lines waiting to be sent
+        self.events = []                   # (due time, one-shot BZ line) waiting to be sent
 
     def frame(self, t):
         """Desired state of every channel at time t. Values are strings, or a tuple of lines for the OLED."""
@@ -84,19 +88,20 @@ class HudRenderer:
         return (0, 0, 0)
 
     def _oled(self):
-        hearts = max(0, min(C.LIVES if self.lives is None else self.lives, 15))
+        total = max(C.LIVES, self.lives or 0, 1)                 # the game's full base integrity
+        hearts = max(0, min(self.lives if self.lives is not None else total, total))
         temp = "LUNAR --C" if self.temp_c is None else "LUNAR %+dC" % round(self.temp_c)
-        lines = ["OC", "OT,0,0,1,BASE %d/15" % hearts, "OR,0,10,60,6,0", "OR,1,11,%d,4,1" % ((58 * hearts) // 15),
+        lines = ["OC", "OT,0,0,1,BASE %d/%d" % (hearts, total), "OR,0,10,60,6,0", "OR,1,11,%d,4,1" % ((58 * hearts) // total),
                  "OT,0,22,1,SAMPLES %d" % self.samples, "OT,0,34,1,%s" % temp, "OI,64,0", "OP"]
         return tuple(lines)
 
     # ---- events from the game
     def pickup(self, t):
         self.pickup_t = t
-        self.events.append("BZ,1200,120,0")
+        self.events.append((t, PICKUP_BEEP))
 
     def chirp(self):
-        self.events.append("BZ,1200,120,0")
+        self.events.append((now(), CHIRP))
 
-    def hit(self):
-        self.events.append(HIT_BEEP)
+    def hit(self, t):
+        self.events += [(t, HIT_BEEP), (t + HIT_GAP_S, HIT_BEEP)]

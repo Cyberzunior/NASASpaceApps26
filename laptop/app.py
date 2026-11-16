@@ -24,6 +24,8 @@ from devio.discovery import SerialScanner, UdpHub
 from devio.gamepad import InputThread, rumble
 from devio import pad as padmod
 from devio.connections import Connections
+from core.port_prompt import PortPrompt
+from gfx.fonts import text as draw_text
 from devio.keyboard_fallback import read_keys
 from devio.links import HudLink, RobotLink, TowerLink, link_thread
 from gfx.perf import PERF
@@ -159,6 +161,7 @@ class App:
             src = sd.sim_camera_source((lambda: robot.pose) if robot else (lambda: self.game.craft))
         self.camera = Camera(self.state, self.log, sim_source=src, robot_ip=self._robot_ip)
         self.connections = Connections(self.links, self.hub, self.scanner, self.camera, self.state, self.log)
+        self.port_prompt = PortPrompt()
         self.input = InputThread(self.state, self.links["robot"], self.log)
         for target, name in ((self.hub.run, "udp-hub"), (self.scanner.run, "serial-scan")):
             th = threading.Thread(target=self._guard(target, name), daemon=True, name=name)
@@ -478,6 +481,31 @@ class App:
         elif st == S.RESULTS:
             self.results.handle(self, a)
 
+    def _port_key(self, e):
+        p = self.port_prompt
+        if e.key == pygame.K_ESCAPE:
+            p.cancel()
+            self.toast("Port setup cancelled", "warn")
+        elif e.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+            if p.enter():
+                for key, val in p.values.items():
+                    self.connections.rows[key].value = val
+                    self.connections.connect(key)
+                self.toast("Ports: ipad %s, tower %s, rover %s" % (p.values["hud"], p.values["tower"], p.values["robot"]), "ok")
+        elif e.key == pygame.K_BACKSPACE:
+            p.back()
+        else:
+            p.type(e.unicode)
+
+    def _draw_port_prompt(self, cv):
+        p = self.port_prompt
+        r = pygame.Rect(C.RENDER_W // 2 - 300, C.RENDER_H // 2 - 80, 600, 160)
+        pygame.draw.rect(cv, (10, 14, 22), r, border_radius=12)
+        pygame.draw.rect(cv, (90, 200, 255), r, 2, border_radius=12)
+        draw_text(cv, p.question, (r.centerx, r.y + 28), 28, anchor="midtop", bold=True)
+        draw_text(cv, "COM" + p.buf + "_", (r.centerx, r.y + 74), 40, anchor="midtop", mono=True)
+        draw_text(cv, "type the number, Enter = next, Esc = cancel", (r.centerx, r.bottom - 32), 20, (150, 160, 175), anchor="midtop")
+
     KEYMAP = {pygame.K_UP: "up", pygame.K_DOWN: "down", pygame.K_LEFT: "left", pygame.K_RIGHT: "right",
               pygame.K_RETURN: "confirm", pygame.K_KP_ENTER: "confirm", pygame.K_F2: "hwcheck", pygame.K_F3: "postfx",
               pygame.K_F4: "debug", pygame.K_F6: "quality", pygame.K_F11: "fullscreen", pygame.K_m: "mute", pygame.K_c: "cam", pygame.K_x: "fire",
@@ -549,6 +577,12 @@ class App:
             if e.type == pygame.QUIT:
                 raise SystemExit
             elif e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_y and e.mod & pygame.KMOD_CTRL:
+                    self.port_prompt.start()                             # Ctrl+Y: set the three COM ports
+                    continue
+                if self.port_prompt.active:
+                    self._port_key(e)
+                    continue
                 if self.game.intro_on and self.sm.flying():
                     self.game.skip_intro()                              # any key skips the intro
                     continue
@@ -788,6 +822,8 @@ class App:
                 if st != S.MENU:
                     self.hud.conn_strip(cv, ui["conn"])
                 self.hud.toasts.draw(cv, C.RENDER_W // 2, 840 if st == S.MENU else 74)
+                if self.port_prompt.active:
+                    self._draw_port_prompt(cv)
                 {S.MENU: self.menu, S.SETTINGS: self.settings, S.CALIBRATE: self.calib, S.HWCHECK: self.hwcheck}[st].draw(cv, self)
             if st == S.PAUSE:
                 self.pause.draw(cv, self)

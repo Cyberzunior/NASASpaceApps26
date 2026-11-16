@@ -50,7 +50,7 @@ ROVER_CMD_TIMEOUT_MS = 300  # the rover stops this long after the last D
 ROVER_PAN_ACC_STEPS = 1500  # camera stepper acceleration, steps/s^2
 
 # ---- Connections (saved by the menu's Connections bar)
-HUD_PORT = ""            # "COM4"
+HUD_PORT = "COM3"          # the UNO Q panel; "" = find it by scanning
 TOWER_PORT = ""          # "COM5"
 ROBOT_ADDR = "192.168.1.50:5005"
 CAMERA_URL = "0"         # the USB webcam (device 0); or a stream URL like "http://192.168.1.50:8080/stream"

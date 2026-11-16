@@ -526,7 +526,7 @@ def test_devices_connect_report_lost_and_the_tower_warns_before_it_fires():
         hud.set_samples(3)
         sh = net.sim_hud
         assert wait(lambda: sh.chirps >= 1 and sh.lcd() == ("PWR 80   O2 65  ", "FOOD70  SHLD40  ") and sh.oled_pushes >= 1, 3.0)
-        assert any("BASE 12/15" in l for l in sh.oled) and any("SAMPLES 3" in l for l in sh.oled)
+        assert any("BASE 12/12" in l for l in sh.oled) and any("SAMPLES 3" in l for l in sh.oled)
         hud.set_temp(118.0)
         assert hud.r.temp_c == 118.0                                       # kept for the game; the panel shows no temperature
         # tower: v3 firmware. Y / T move the motors, D says both arrived, the speeds and the idle pose went out on connect
